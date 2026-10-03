@@ -8,7 +8,6 @@ import {
   Share2,
   Component,
   Check,
-  Users,
   UserPlus,
   UserMinus,
   X,
@@ -81,7 +80,6 @@ const TIER_STYLES = {
   monthly: {
     themeColor: "text-amber-500",
     buttonSolid: "bg-amber-500 hover:bg-amber-600 text-black border-amber-500",
-    statBox: "border-amber-500/20 bg-amber-500/[0.02]",
     bioBox:
       "bg-gradient-to-br from-amber-500/[0.05] to-orange-500/[0.02] border border-amber-500/30 shadow-[0_0_30px_rgba(245,158,11,0.1)]",
     avatarRing: "border-amber-500 shadow-[0_0_25px_rgba(245,158,11,0.4)]",
@@ -90,7 +88,6 @@ const TIER_STYLES = {
     themeColor: "text-indigo-500",
     buttonSolid:
       "bg-indigo-500 hover:bg-indigo-600 text-white border-indigo-500",
-    statBox: "border-indigo-500/20 bg-indigo-500/[0.02]",
     bioBox:
       "bg-gradient-to-br from-indigo-500/[0.05] to-purple-500/[0.02] border border-indigo-500/30 shadow-[0_0_30px_rgba(99,102,241,0.1)]",
     avatarRing: "border-indigo-500 shadow-[0_0_25px_rgba(99,102,241,0.4)]",
@@ -98,7 +95,6 @@ const TIER_STYLES = {
   free: {
     themeColor: "text-white",
     buttonSolid: "bg-white hover:bg-zinc-200 text-black border-white",
-    statBox: "border-white/10 bg-white/[0.02]",
     bioBox: "border border-white/10 bg-white/[0.02]",
     avatarRing: "border-[#1c1c1e]",
   },
@@ -127,6 +123,10 @@ const RING_THICKNESS = {
 
 const DEFAULT_BANNER =
   "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=2564&auto=format&fit=crop";
+
+// Same card look as the rest of the site
+const cardBase =
+  "rounded-2xl border border-white/[0.06] bg-gradient-to-b from-zinc-800/50 to-zinc-900/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]";
 
 const getDynamicButtonStyle = (pref, tierStyles) => {
   const layout =
@@ -162,87 +162,83 @@ const getDynamicButtonStyle = (pref, tierStyles) => {
   }
 };
 
-// ---- New Custom Character Card Component ----
-const PublicCharCard = ({ char }) => {
-  return (
-    <Link
-      to={`/character/${char._id}`}
-      className="group relative block rounded-2xl overflow-hidden aspect-[3/4] bg-zinc-900 border border-white/10 hover:border-white/30 transition-all duration-300 hover:shadow-2xl hover:-translate-y-1"
-    >
-      <img
-        src={char.images[0].url || "https://via.placeholder.com/300x400"}
-        alt={char.name || "Character Image"}
-        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700 ease-in-out"
-      />
-      <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent"></div>
-      <div className="absolute bottom-0 left-0 p-4 w-full">
-        <h4 className="text-white font-bold text-sm sm:text-base md:text-lg truncate drop-shadow-md">
-          {char.name || "Unnamed Character"}
-        </h4>
-      </div>
-    </Link>
-  );
-};
+// ---- Character card ----
+const PublicCharCard = ({ char }) => (
+  <Link
+    to={`/character/${char._id}`}
+    className="group relative block rounded-2xl overflow-hidden aspect-[3/4] bg-zinc-900 border border-white/10 hover:border-white/30 transition-all duration-300 hover:shadow-2xl hover:-translate-y-1"
+  >
+    <img
+      src={char.images?.[0]?.url || "https://via.placeholder.com/300x400"}
+      alt={char.name || "Character Image"}
+      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700 ease-in-out"
+    />
+    <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent"></div>
+    <div className="absolute bottom-0 left-0 p-4 w-full">
+      <h4 className="text-white font-bold text-sm sm:text-base md:text-lg truncate drop-shadow-md">
+        {char.name || "Unnamed Character"}
+      </h4>
+    </div>
+  </Link>
+);
 
 // ---- Followers / Following List Modal ----
-const FollowListModal = ({ title, users, isLoading, onClose }) => {
-  return (
+const FollowListModal = ({ title, users, isLoading, onClose }) => (
+  <div
+    className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm px-4"
+    onClick={onClose}
+  >
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm px-4"
-      onClick={onClose}
+      className="w-full max-w-md max-h-[70vh] bg-[#0a0a0a] border border-white/10 rounded-2xl shadow-2xl overflow-hidden flex flex-col"
+      onClick={(e) => e.stopPropagation()}
     >
-      <div
-        className="w-full max-w-md max-h-[70vh] bg-[#0a0a0a] border border-white/10 rounded-2xl shadow-2xl overflow-hidden flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
-          <h3 className="text-white font-bold text-base">{title}</h3>
-          <button
-            onClick={onClose}
-            className="text-zinc-400 hover:text-white transition-colors"
-          >
-            <X size={20} />
-          </button>
-        </div>
+      <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
+        <h3 className="text-white font-bold text-base">{title}</h3>
+        <button
+          onClick={onClose}
+          className="text-zinc-400 hover:text-white transition-colors"
+        >
+          <X size={20} />
+        </button>
+      </div>
 
-        <div className="overflow-y-auto px-2 py-2">
-          {isLoading ? (
-            <div className="py-10 text-center text-zinc-500 text-sm">
-              Loading...
-            </div>
-          ) : users.length === 0 ? (
-            <div className="py-10 text-center text-zinc-500 text-sm">
-              Nobody here yet.
-            </div>
-          ) : (
-            users.map((u) => (
-              <Link
-                key={u._id}
-                to={`/profile/${u._id}`}
-                onClick={onClose}
-                className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-white/5 transition-colors"
-              >
-                <img
-                  src={u.profilePicture || "https://via.placeholder.com/40"}
-                  alt={u.username}
-                  className="w-10 h-10 rounded-full object-cover bg-zinc-900 border border-white/10"
-                />
-                <div className="flex-1 min-w-0">
-                  <p className="text-white text-sm font-semibold truncate">
-                    {u.username}
-                  </p>
-                  {u.bio && (
-                    <p className="text-zinc-500 text-xs truncate">{u.bio}</p>
-                  )}
-                </div>
-              </Link>
-            ))
-          )}
-        </div>
+      <div className="overflow-y-auto px-2 py-2">
+        {isLoading ? (
+          <div className="py-10 text-center text-zinc-500 text-sm">
+            Loading...
+          </div>
+        ) : users.length === 0 ? (
+          <div className="py-10 text-center text-zinc-500 text-sm">
+            Nobody here yet.
+          </div>
+        ) : (
+          users.map((u) => (
+            <Link
+              key={u._id}
+              to={`/profile/${u._id}`}
+              onClick={onClose}
+              className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-white/5 transition-colors"
+            >
+              <img
+                src={u.profilePicture || "https://via.placeholder.com/40"}
+                alt={u.username}
+                className="w-10 h-10 rounded-full object-cover bg-zinc-900 border border-white/10"
+              />
+              <div className="flex-1 min-w-0">
+                <p className="text-white text-sm font-semibold truncate">
+                  {u.username}
+                </p>
+                {u.bio && (
+                  <p className="text-zinc-500 text-xs truncate">{u.bio}</p>
+                )}
+              </div>
+            </Link>
+          ))
+        )}
       </div>
     </div>
-  );
-};
+  </div>
+);
 
 const PublicProfile = () => {
   const { userId } = useParams();
@@ -296,7 +292,6 @@ const PublicProfile = () => {
     loggedInUser && profileUser && loggedInUser._id === profileUser._id,
   );
 
-  // Check whether the logged-in user already follows this profile
   useEffect(() => {
     const checkFollowStatus = async () => {
       if (!loggedInUser || !profileUser || isOwnProfile) {
@@ -418,7 +413,6 @@ const PublicProfile = () => {
 
   const customizations = profileUser.profileCustomizationSettings || {};
 
-  // Har field: DB mein value hai to wahi use karo, khaali/missing hai to default pe fall karo.
   const activeTheme = customizations.colorTheme || null;
   const activeBackgroundClass =
     THEME_BACKGROUNDS[activeTheme] || "bg-[#050505]";
@@ -444,13 +438,10 @@ const PublicProfile = () => {
       }
     : undefined;
 
-  // Stat boxes: Following box only shows up on your own profile
+  const charCount = characters?.length || 0;
+
   const statBoxes = [
-    {
-      key: "characters",
-      value: characters?.length || 0,
-      label: "Characters Created",
-    },
+    { key: "characters", value: charCount, label: "Characters" },
     {
       key: "followers",
       value: followersCount,
@@ -467,7 +458,6 @@ const PublicProfile = () => {
           },
         ]
       : []),
-    { key: "plan", value: subTier, label: "Creator Plan", capitalize: true },
   ];
 
   return (
@@ -493,8 +483,8 @@ const PublicProfile = () => {
             <span className="text-sm font-medium">Back</span>
           </button>
         </div>
-        {/* ------------------- */}
 
+        {/* --- Banner --- */}
         <div className="w-full h-32 sm:h-48 md:h-64 lg:h-80 rounded-2xl sm:rounded-[2rem] overflow-hidden relative shadow-2xl">
           <img
             src={bannerImage}
@@ -504,6 +494,7 @@ const PublicProfile = () => {
           <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent"></div>
         </div>
 
+        {/* --- Avatar --- */}
         <div className="relative -mt-10 sm:-mt-20 md:-mt-24 lg:-mt-28 mb-4 z-20 flex justify-center">
           <div className="rounded-full bg-black/50 backdrop-blur-md p-1.5 sm:p-2 shadow-2xl border border-white/5">
             <img
@@ -518,7 +509,8 @@ const PublicProfile = () => {
           </div>
         </div>
 
-        <div className="text-center mb-6 sm:mb-8 px-2 flex flex-col items-center">
+        {/* --- Name --- */}
+        <div className="text-center mb-6 px-2 flex flex-col items-center">
           <h1 className="text-lg sm:text-2xl md:text-4xl font-bold text-white flex items-center justify-center gap-1.5 sm:gap-2 drop-shadow-md">
             {profileUser.username || "Unknown Creator"}
             {isPro && (
@@ -528,7 +520,7 @@ const PublicProfile = () => {
               />
             )}
           </h1>
-          <p className="text-xs sm:text-sm md:text-base text-zinc-400 mt-1.5 sm:mt-2 flex items-center justify-center gap-1.5 sm:gap-2">
+          <p className="text-xs sm:text-sm md:text-base text-zinc-400 mt-1.5 sm:mt-2">
             <span className="capitalize text-zinc-300 font-medium">
               {subTier} Creator
             </span>
@@ -546,6 +538,7 @@ const PublicProfile = () => {
           )}
         </div>
 
+        {/* --- Actions --- */}
         <div className="flex justify-center gap-3 w-full max-w-md mb-8 z-20">
           {!isOwnProfile && (
             <button
@@ -557,12 +550,12 @@ const PublicProfile = () => {
                 "..."
               ) : isFollowing ? (
                 <>
-                  <UserMinus size={16} className="sm:w-4 sm:h-4" />
+                  <UserMinus size={16} />
                   Following
                 </>
               ) : (
                 <>
-                  <UserPlus size={16} className="sm:w-4 sm:h-4" />
+                  <UserPlus size={16} />
                   Follow
                 </>
               )}
@@ -572,30 +565,23 @@ const PublicProfile = () => {
             onClick={handleShare}
             className={getDynamicButtonStyle(appliedButtonSetting, style)}
           >
-            {justCopied ? (
-              <Check size={16} className="sm:w-4 sm:h-4" />
-            ) : (
-              <Share2 size={16} className="sm:w-4 sm:h-4" />
-            )}
+            {justCopied ? <Check size={16} /> : <Share2 size={16} />}
             {justCopied ? "Link Copied!" : "Share Profile"}
           </button>
         </div>
 
-        <div
-          className={`grid gap-4 md:gap-6 w-full max-w-2xl mb-8 sm:mb-12 z-20 ${statBoxes.length === 4 ? "grid-cols-2 sm:grid-cols-4" : "grid-cols-3"}`}
-        >
+        {/* --- Stats --- */}
+        <div className="flex flex-wrap justify-center gap-3 sm:gap-4 w-full max-w-3xl mb-8 sm:mb-12 z-20">
           {statBoxes.map((box) => (
             <div
               key={box.key}
               onClick={box.onClick}
-              className={`flex flex-col items-center justify-center py-4 sm:py-6 rounded-xl sm:rounded-2xl border backdrop-blur-md shadow-lg ${style.statBox} ${box.onClick ? "cursor-pointer hover:bg-white/[0.04] transition-colors" : ""}`}
+              className={`${cardBase} w-[7.5rem] sm:w-40 flex flex-col items-center justify-center py-5 transition-all duration-200 hover:border-white/20 ${box.onClick ? "cursor-pointer" : ""}`}
             >
-              <span
-                className={`text-xl sm:text-3xl font-bold text-white ${box.capitalize ? "capitalize" : ""}`}
-              >
+              <span className="text-2xl font-semibold text-white">
                 {box.value}
               </span>
-              <span className="text-[9px] sm:text-[11px] md:text-xs text-zinc-400 font-medium uppercase tracking-widest mt-1 text-center">
+              <span className="text-[10px] text-zinc-400 font-medium uppercase tracking-widest mt-1.5">
                 {box.label}
               </span>
             </div>
@@ -603,48 +589,35 @@ const PublicProfile = () => {
         </div>
 
         <div className="w-full flex flex-col gap-8 sm:gap-12 pb-6 sm:pb-12 z-20">
+          {/* --- Bio --- */}
           <div className="w-full">
-            {isPro ? (
-              <div
-                className={`relative p-5 sm:p-8 md:p-10 rounded-2xl sm:rounded-3xl ${style.bioBox} overflow-hidden backdrop-blur-md`}
-              >
+            <div
+              className={`relative p-5 sm:p-8 md:p-10 rounded-2xl sm:rounded-3xl overflow-hidden backdrop-blur-md ${style.bioBox}`}
+            >
+              {isPro && (
                 <Quote
                   size={60}
                   className={`absolute -bottom-4 -right-4 sm:-bottom-6 sm:-right-6 sm:w-20 sm:h-20 ${style.themeColor} opacity-10 -rotate-12`}
                 />
-                <h3 className="text-[10px] sm:text-xs md:text-sm font-bold text-zinc-400 mb-3 sm:mb-4 uppercase tracking-widest">
-                  Biography
-                </h3>
-                <div className="max-w-5xl">
-                  <p className="text-base sm:text-lg md:text-xl font-medium leading-relaxed tracking-wide text-white drop-shadow-md relative z-10">
-                    {profileUser.bio || (
-                      <span className="italic opacity-40">
-                        Writing their own legend...
-                      </span>
-                    )}
-                  </p>
-                </div>
-              </div>
-            ) : (
-              <div
-                className={`p-5 sm:p-8 md:p-10 rounded-2xl sm:rounded-3xl ${style.bioBox} backdrop-blur-md`}
+              )}
+              <h3 className="text-[10px] sm:text-xs font-bold text-zinc-400 mb-3 sm:mb-4 uppercase tracking-widest">
+                About
+              </h3>
+              <p
+                className={`max-w-5xl relative z-10 leading-relaxed ${isPro ? "text-base sm:text-lg md:text-xl font-medium text-white" : "text-sm sm:text-base md:text-lg text-zinc-400"}`}
               >
-                <h3 className="text-[10px] sm:text-xs md:text-sm font-bold text-zinc-500 mb-3 sm:mb-4 uppercase tracking-widest">
-                  Biography
-                </h3>
-                <div className="max-w-5xl">
-                  <p className="text-zinc-400 leading-relaxed text-sm sm:text-base md:text-lg">
-                    {profileUser.bio || (
-                      <span className="italic text-zinc-600">
-                        No biography provided.
-                      </span>
-                    )}
-                  </p>
-                </div>
-              </div>
-            )}
+                {profileUser.bio || (
+                  <span className="italic opacity-40">
+                    {isPro
+                      ? "Writing their own legend..."
+                      : "No biography provided."}
+                  </span>
+                )}
+              </p>
+            </div>
           </div>
 
+          {/* --- Portfolio --- */}
           <div className="w-full">
             <div className="flex items-center justify-between mb-5 sm:mb-8">
               <h2 className="text-lg sm:text-2xl font-bold text-white drop-shadow-md flex items-center gap-2">
@@ -653,7 +626,7 @@ const PublicProfile = () => {
               </h2>
             </div>
 
-            {characters?.length === 0 ? (
+            {charCount === 0 ? (
               <div className="flex flex-col items-center justify-center py-14 sm:py-24 bg-black/20 backdrop-blur-md border border-dashed border-white/10 rounded-2xl sm:rounded-[2rem] text-center w-full px-4">
                 <Ghost
                   strokeWidth={1.5}
@@ -662,7 +635,7 @@ const PublicProfile = () => {
                 <h3 className="text-white font-bold text-base sm:text-xl mb-2 sm:mb-3">
                   Nothing here yet
                 </h3>
-                <p className="text-zinc-500 text-sm sm:text-base mb-6 sm:mb-8 max-w-md">
+                <p className="text-zinc-500 text-sm sm:text-base max-w-md">
                   {profileUser.username || "This user"} hasn't published any
                   characters.
                 </p>

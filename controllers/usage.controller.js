@@ -8,9 +8,6 @@ import {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/* ============================================================
-   GET /api/chat/usage  -> sirf usage info bhejta hai
-============================================================ */
 export const getUsage = async (req, res) => {
   try {
     const user = await User.findById(req.user._id).select("usage subscription");
@@ -20,6 +17,7 @@ export const getUsage = async (req, res) => {
     const usage = user.usage || {};
     const sub = user.subscription;
 
+    // usage bhi pass karna zaroori hai (pack ke liye packMessagesLeft check hota hai)
     const isPaid = hasActivePaidPlan(sub, usage);
 
     // ---- Free plan: 24h window ----
@@ -58,7 +56,7 @@ export const getUsage = async (req, res) => {
         // Free
         messagesToday,
         totalMessages: usage.totalMessages || 0,
-        messagesResetAt: resetAt,
+        messagesResetAt: resetAt, // null sirf tab jab aaj koi message nahi hua
         // Pack
         packMessagesLeft: packLeft,
         packMessagesUsed: isPack ? Math.max(0, PACK_MESSAGES - packLeft) : 0,
@@ -79,60 +77,5 @@ export const getUsage = async (req, res) => {
   } catch (err) {
     console.error("getUsage failed:", err.message);
     res.status(500).json({ error: "Failed to load usage." });
-  }
-};
-
-/* ============================================================
-   checkMessageLimit -> AI routes se pehle chalta hai.
-   Limit ok ho to counter badhata/ghatata hai aur next() call karta hai.
-   NOTE: controller me dobara increment mat karna (double count hoga).
-============================================================ */
-// Sirf CHECK karta hai, counter nahi badhata (counting controller me hoti hai)
-export const checkMessageLimit = async (req, res, next) => {
-  try {
-    const user = await User.findById(req.user._id).select("usage subscription");
-    if (!user) return res.status(404).json({ error: "User not found." });
-
-    const usage = user.usage || {};
-    const sub = user.subscription;
-    const isPaid = hasActivePaidPlan(sub, usage);
-
-    // Pack: bache hue messages
-    if (isPaid && sub?.plan === "pack") {
-      if ((usage.packMessagesLeft || 0) > 0) return next();
-      return res.status(403).json({
-        error: "Pack messages finished.",
-        code: "PACK_EXHAUSTED",
-      });
-    }
-
-    // Monthly / koi bhi aur active paid plan: unlimited
-    if (isPaid) return next();
-
-    // Free
-    const now = new Date();
-    const resetAt = usage.messagesResetAt
-      ? new Date(usage.messagesResetAt)
-      : null;
-    const windowExpired = resetAt && now >= resetAt;
-    const messagesToday = windowExpired ? 0 : usage.messagesToday || 0;
-
-    if ((usage.totalMessages || 0) >= FREE_TOTAL_LIMIT) {
-      return res.status(403).json({
-        error: "Free message limit reached. Buy a pack to continue.",
-        code: "TOTAL_LIMIT_REACHED",
-      });
-    }
-    if (messagesToday >= FREE_DAILY_LIMIT) {
-      return res.status(429).json({
-        error: "Daily limit reached.",
-        code: "DAILY_LIMIT_REACHED",
-        messagesResetAt: windowExpired ? null : resetAt,
-      });
-    }
-    next();
-  } catch (err) {
-    console.error("checkMessageLimit failed:", err.message);
-    res.status(500).json({ error: "Failed to check message limit." });
   }
 };

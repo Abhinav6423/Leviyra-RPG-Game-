@@ -1,4 +1,5 @@
 import mongoose, { Schema } from "mongoose";
+import { hasActivePaidPlan } from "../utils/hasActivePaidPlan.js";
 
 const userSchema = new Schema(
   {
@@ -77,6 +78,16 @@ const userSchema = new Schema(
       default: true,
     },
 
+    terminateAccount: {
+      type: Boolean,
+      default: false,
+    },
+
+    isAdmin: {
+      type: Boolean,
+      default: false,
+    },
+
     totalCharactersCreated: {
       type: Number,
       default: 0,
@@ -88,46 +99,51 @@ const userSchema = new Schema(
       default: Date.now,
     },
 
-    
     subscription: {
       plan: {
         type: String,
-        enum: ["free", "weekly", "monthly"],
+        enum: ["free", "pack", "monthly"],
         default: "free",
       },
       status: {
         type: String,
+        // "cancelled" is kept only for old auto-pay users still inside their paid period
         enum: ["active", "cancelled", "expired", "none"],
         default: "none",
       },
       dodoCustomerId: { type: String, trim: true },
+      // Legacy: only old auto-pay subscribers have this. New purchases never set it.
       dodoSubscriptionId: { type: String, trim: true },
+      // Monthly only (30 days from payment). Not used for pack (no time limit).
       currentPeriodEnd: { type: Date },
+      // Processed payment ids (pack + monthly). Prevents double credit on webhook retries.
+      packPaymentIds: { type: [String], default: [] },
     },
+
     usage: {
-      // ---- FREE-TIER counters (unaffected by paid plans) ----
-      totalMessages: { type: Number, default: 0 },
-      messagesToday: { type: Number, default: 0 },
+      // ================= FREE PLAN =================
+      totalMessages: { type: Number, default: 0, min: 0 },
+      messagesToday: { type: Number, default: 0, min: 0 },
       messagesResetAt: { type: Date, default: null },
 
-      // ---- WEEKLY-PLAN counter — completely separate bucket, never
-      // touches or is touched by the free-tier fields above. Caps at
-      // 1000 messages per billing cycle (not a 7-day time window).
-      weeklyMessagesUsed: { type: Number, default: 0 },
-      // Snapshot of subscription.currentPeriodEnd this counter belongs
-      // to. When the stored value stops matching the live
-      // currentPeriodEnd, that means the plan renewed -> the counter
-      // resets automatically. See updateUserUsage in the controller.
-      weeklyUsageCycleEnd: { type: Date, default: null },
+      // ================= 1000 MESSAGE PACK =================
+      // Remaining pack messages. +1000 on purchase, -1 per message.
+      // When it hits 0 the plan automatically goes back to free. No time limit / reset.
+      packMessagesLeft: { type: Number, default: 0, min: 0 },
 
-      // NOTE: monthly plan is fully unlimited — intentionally has no
-      // counter here at all, nothing to track.
+      // ================= ALL PLANS (analytics) =================
+      lifetimeMessages: { type: Number, default: 0, min: 0 },
+      lastMessageAt: { type: Date, default: null },
+
+      // NOTE: monthly plan is unlimited, so it has no limit counter.
     },
+
     followersCount: {
       type: Number,
       default: 0,
       min: 0,
     },
+
     followingCount: {
       type: Number,
       default: 0,
@@ -136,13 +152,21 @@ const userSchema = new Schema(
   },
   {
     timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
   },
 );
 
 userSchema.index({ createdAt: -1 });
 
+// Single source of truth: reuses the same util as the routes and chat logic
+userSchema.virtual("hasValidPremium").get(function () {
+  return hasActivePaidPlan(this.subscription, this.usage);
+});
+
+// { virtuals: true } is needed so the custom toJSON doesn't drop hasValidPremium
 userSchema.methods.toJSON = function () {
-  const obj = this.toObject();
+  const obj = this.toObject({ virtuals: true });
   delete obj.__v;
   delete obj.firebaseUid;
   return obj;

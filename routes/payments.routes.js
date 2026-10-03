@@ -3,32 +3,59 @@ import dodo from "../config/dodo.js";
 import { protect } from "../middlewares/auth.middleware.js";
 import User from "../modals/User.modal.js";
 import { hasActivePaidPlan } from "../utils/hasActivePaidPlan.js";
+import { FREE_TOTAL_LIMIT, PACK_MESSAGES } from "../utils/usage.js";
 
 const router = express.Router();
 
-// 1. WEEKLY CHECKOUT ROUTE
-router.post("/checkout/weekly", protect, async (req, res) => {
+const getDomainUrl = () =>
+  process.env.NODE_ENV === "production"
+    ? "https://leviyra.com"
+    : "http://localhost:3000";
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const MONTHLY_DAYS = 30;
+
+const startOfDay = (d) => {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x.getTime();
+};
+
+const createCheckout = (user, productId, plan) =>
+  dodo.checkoutSessions.create({
+    product_cart: [{ product_id: productId, quantity: 1 }],
+    customer: {
+      email: user.email,
+      name: user.username,
+    },
+    metadata: {
+      userId: user._id.toString(),
+      plan,
+    },
+    return_url: `${getDomainUrl()}/payment-success`,
+  });
+
+// 1. PACK CHECKOUT (one-time, 1000 messages)
+router.post("/checkout/pack", protect, async (req, res) => {
   try {
     const user = req.user;
-    const domainUrl =
-      process.env.NODE_ENV === "production"
-        ? "https://leviyra.com"
-        : "http://localhost:3000";
 
-    const session = await dodo.checkoutSessions.create({
-      product_cart: [
-        { product_id: process.env.DODO_PRODUCT_ID_WEEKLY, quantity: 1 },
-      ],
-      customer: {
-        email: user.email,
-        name: user.username,
-      },
-      metadata: {
-        userId: user._id.toString(),
-        plan: "weekly",
-      },
-      return_url: `${domainUrl}/payment-success`,
-    });
+    // Active monthly (unlimited) user doesn't need a pack
+    if (
+      hasActivePaidPlan(user.subscription, user.usage) &&
+      user.subscription.plan === "monthly"
+    ) {
+      return res.status(400).json({
+        message:
+          "You already have an active monthly plan with unlimited messages.",
+      });
+    }
+
+    const session = await createCheckout(
+      user,
+      process.env.DODO_PRODUCT_ID_PACK,
+      "pack",
+    );
 
     res.json({ checkoutUrl: session.checkout_url });
   } catch (err) {
@@ -37,29 +64,14 @@ router.post("/checkout/weekly", protect, async (req, res) => {
   }
 });
 
-// 2. MONTHLY CHECKOUT ROUTE
+// 2. MONTHLY CHECKOUT (one-time payment, 30 days access, no auto-renew)
 router.post("/checkout/monthly", protect, async (req, res) => {
   try {
-    const user = req.user;
-    const domainUrl =
-      process.env.NODE_ENV === "production"
-        ? "https://leviyra.com"
-        : "http://localhost:3000";
-
-    const session = await dodo.checkoutSessions.create({
-      product_cart: [
-        { product_id: process.env.DODO_PRODUCT_ID_MONTHLY, quantity: 1 },
-      ],
-      customer: {
-        email: user.email,
-        name: user.username,
-      },
-      metadata: {
-        userId: user._id.toString(),
-        plan: "monthly",
-      },
-      return_url: `${domainUrl}/payment-success`,
-    });
+    const session = await createCheckout(
+      req.user,
+      process.env.DODO_PRODUCT_ID_MONTHLY,
+      "monthly",
+    );
 
     res.json({ checkoutUrl: session.checkout_url });
   } catch (err) {
@@ -73,100 +85,47 @@ router.get("/status", protect, async (req, res) => {
   try {
     const user = req.user;
     const sub = user.subscription;
+    const usage = user.usage || {};
 
-    const isPaidActive = hasActivePaidPlan(sub);
+    const isPaidActive = hasActivePaidPlan(sub, usage);
+    const plan = isPaidActive ? sub.plan : "free";
 
+    // daysLeft only for monthly (pack has no time limit). Calendar days.
     let daysLeft = null;
-    if (isPaidActive) {
-      const msLeft = new Date(sub.currentPeriodEnd) - new Date();
-      daysLeft = Math.ceil(msLeft / (1000 * 60 * 60 * 24));
+    if (isPaidActive && plan === "monthly" && sub.currentPeriodEnd) {
+      daysLeft = Math.max(
+        0,
+        Math.round(
+          (startOfDay(sub.currentPeriodEnd) - startOfDay(new Date())) /
+            MS_PER_DAY,
+        ),
+      );
     }
 
     res.json({
       isPaidActive,
-      plan: sub?.plan || "free",
+      plan,
       status: sub?.status || "none",
-      currentPeriodEnd: sub?.currentPeriodEnd || null,
-      willRenew: sub?.status === "active",
+      currentPeriodEnd:
+        plan === "monthly" ? sub?.currentPeriodEnd || null : null,
+      willRenew: false, // no auto-renew anymore
       daysLeft,
+      pack:
+        plan === "pack"
+          ? {
+              messagesLeft: usage.packMessagesLeft || 0,
+              totalMessages: PACK_MESSAGES,
+            }
+          : null,
       usage: {
-        totalMessages: user.usage?.totalMessages || 0,
-        totalLimit: 50,
+        totalMessages: usage.totalMessages || 0,
+        totalLimit: FREE_TOTAL_LIMIT,
+        packMessagesLeft: usage.packMessagesLeft || 0,
       },
     });
   } catch (err) {
     console.error("Status check error:", err);
     res.status(500).json({ message: "Could not fetch status" });
-  }
-});
-
-// CANCEL SUBSCRIPTION ROUTE (graceful — access continues till period end)
-router.post("/cancel", protect, async (req, res) => {
-  try {
-    const user = req.user;
-    const sub = user.subscription;
-    const subId = sub?.dodoSubscriptionId;
-
-    if (!subId || !sub?.plan || sub.plan === "free") {
-      return res.status(400).json({ message: "No active subscription found" });
-    }
-
-    if (sub.status === "cancelled" || sub.status === "expired") {
-      return res
-        .status(400)
-        .json({ message: "Subscription is already cancelled or expired" });
-    }
-
-    await dodo.subscriptions.update(subId, {
-      cancel_at_next_billing_date: true,
-    });
-
-    await User.findByIdAndUpdate(user._id, {
-      "subscription.status": "cancelled",
-    });
-
-    return res.status(200).json({
-      success: true,
-      message:
-        "Your subscription has been cancelled. You'll keep access until your current billing period ends.",
-      accessUntil: sub.currentPeriodEnd,
-    });
-  } catch (err) {
-    console.error("Cancel subscription error:", err);
-    return res.status(500).json({ message: "Could not cancel subscription" });
-  }
-});
-
-// REACTIVATE SUBSCRIPTION ROUTE (undo a scheduled cancellation)
-router.post("/reactivate", protect, async (req, res) => {
-  try {
-    const user = req.user;
-    const sub = user.subscription;
-    const subId = sub?.dodoSubscriptionId;
-
-    if (!subId || sub.status !== "cancelled") {
-      return res
-        .status(400)
-        .json({ message: "No cancelled subscription to reactivate" });
-    }
-
-    await dodo.subscriptions.update(subId, {
-      cancel_at_next_billing_date: false,
-    });
-
-    await User.findByIdAndUpdate(user._id, {
-      "subscription.status": "active",
-    });
-
-    return res.status(200).json({
-      success: true,
-      message: "Your subscription has been reactivated.",
-    });
-  } catch (err) {
-    console.error("Reactivate subscription error:", err);
-    return res
-      .status(500)
-      .json({ message: "Could not reactivate subscription" });
   }
 });
 
@@ -190,175 +149,106 @@ router.post("/webhook", async (req, res) => {
 
     const data = event.data || {};
 
+    console.log("WEBHOOK EVENT:", event.type);
     console.log("WEBHOOK DATA:", JSON.stringify(data, null, 2));
 
+    // Both plans are one-time payments now
+    if (event.type !== "payment.succeeded") {
+      return res.status(200).send("Ignored");
+    }
+
+    const plan = data.metadata?.plan;
     const customerId = data.customer?.customer_id || data.customer_id;
-    const subscriptionId = data.subscription_id;
-    const userId = data.metadata?.userId;
+    const paymentId = data.payment_id;
 
-    const resolveUser = async () => {
-      if (userId) return userId;
-      if (subscriptionId) {
-        const u = await User.findOne({
-          "subscription.dodoSubscriptionId": subscriptionId,
-        });
-        if (u) return u._id.toString();
-      }
-      if (customerId) {
-        const u = await User.findOne({
-          "subscription.dodoCustomerId": customerId,
-        });
-        if (u) return u._id.toString();
-      }
-      return null;
-    };
-
-    // FIX: don't blindly default to "weekly" — fall back to the user's
-    // existing plan first, so a renewal/update event without metadata
-    // doesn't silently downgrade a monthly subscriber to weekly.
-    const resolvePlan = async (resolvedUserId) => {
-      if (data.metadata?.plan) return data.metadata.plan;
-      if (resolvedUserId) {
-        const existing =
-          await User.findById(resolvedUserId).select("subscription.plan");
-        if (
-          existing?.subscription?.plan &&
-          existing.subscription.plan !== "free"
-        ) {
-          return existing.subscription.plan;
-        }
-      }
-      return "weekly";
-    };
-
-    const getFallbackPeriodEnd = (planType) => {
-      const daysToAdd = planType === "monthly" ? 30 : 7;
-      return new Date(Date.now() + daysToAdd * 24 * 60 * 60 * 1000);
-    };
-
-    if (
-      event.type === "subscription.active" ||
-      event.type === "payment.succeeded"
-    ) {
-      const resolvedUserId = await resolveUser();
-
-      if (resolvedUserId) {
-        const purchasedPlan = await resolvePlan(resolvedUserId);
-        const periodEnd = data.next_billing_date
-          ? new Date(data.next_billing_date)
-          : getFallbackPeriodEnd(purchasedPlan);
-
-        await User.findByIdAndUpdate(resolvedUserId, {
-          "subscription.plan": purchasedPlan,
-          "subscription.status": "active",
-          "subscription.currentPeriodEnd": periodEnd,
-          "subscription.dodoCustomerId": customerId,
-          "subscription.dodoSubscriptionId": subscriptionId,
-        });
-
-        console.log(
-          `Subscription activated for user: ${resolvedUserId} (${purchasedPlan})`,
-        );
-      } else {
-        console.error(`Could not resolve user for ${event.type}`, {
-          customerId,
-          subscriptionId,
-        });
-      }
+    let resolvedUserId = data.metadata?.userId;
+    if (!resolvedUserId && customerId) {
+      const u = await User.findOne({
+        "subscription.dodoCustomerId": customerId,
+      });
+      if (u) resolvedUserId = u._id.toString();
     }
 
-    if (event.type === "subscription.updated") {
-      const resolvedUserId = await resolveUser();
+    if (!resolvedUserId || !paymentId) {
+      console.error("Payment: missing user or payment id", {
+        resolvedUserId,
+        paymentId,
+      });
+      return res.status(200).send("Ignored");
+    }
 
-      if (resolvedUserId) {
-        const status = data.status;
-
-        if (status === "active") {
-          const purchasedPlan = await resolvePlan(resolvedUserId);
-          const periodEnd = data.next_billing_date
-            ? new Date(data.next_billing_date)
-            : getFallbackPeriodEnd(purchasedPlan);
-
-          await User.findByIdAndUpdate(resolvedUserId, {
-            "subscription.plan": purchasedPlan,
+    // ================= PACK: +1000 messages =================
+    if (plan === "pack") {
+      // If this paymentId was already processed, filter won't match -> no double credit
+      const result = await User.updateOne(
+        {
+          _id: resolvedUserId,
+          "subscription.packPaymentIds": { $ne: paymentId },
+        },
+        {
+          $set: {
+            "subscription.plan": "pack",
             "subscription.status": "active",
-            "subscription.currentPeriodEnd": periodEnd,
             "subscription.dodoCustomerId": customerId,
-            "subscription.dodoSubscriptionId": subscriptionId,
-          });
-          console.log(
-            `Subscription updated -> active for user: ${resolvedUserId}`,
-          );
-        } else if (status === "cancelled") {
-          await User.findByIdAndUpdate(resolvedUserId, {
-            "subscription.status": "cancelled",
-          });
-          console.log(
-            `Subscription updated -> cancelled (access continues till period end) for user: ${resolvedUserId}`,
-          );
-        } else if (
-          status === "expired" ||
-          status === "on_hold" ||
-          status === "failed"
-        ) {
-          await User.findByIdAndUpdate(resolvedUserId, {
-            "subscription.status": "expired",
-          });
-          console.log(
-            `Subscription updated -> expired for user: ${resolvedUserId}`,
-          );
-        }
-      } else {
-        console.error(`Could not resolve user for subscription.updated`, {
-          customerId,
-          subscriptionId,
-        });
-      }
+          },
+          $unset: { "subscription.currentPeriodEnd": "" },
+          $inc: { "usage.packMessagesLeft": PACK_MESSAGES },
+          $addToSet: { "subscription.packPaymentIds": paymentId },
+        },
+      );
+
+      console.log(
+        result.modifiedCount
+          ? `Pack credited (+${PACK_MESSAGES}) for user: ${resolvedUserId}`
+          : `Pack payment ${paymentId} already processed, skipping`,
+      );
+
+      return res.status(200).send("Secure Webhook processed successfully");
     }
 
-    if (event.type === "subscription.renewed") {
-      const resolvedUserId = await resolveUser();
-
-      if (resolvedUserId) {
-        const purchasedPlan = await resolvePlan(resolvedUserId);
-        const periodEnd = data.next_billing_date
-          ? new Date(data.next_billing_date)
-          : getFallbackPeriodEnd(purchasedPlan);
-
-        await User.findByIdAndUpdate(resolvedUserId, {
-          "subscription.status": "active",
-          "subscription.currentPeriodEnd": periodEnd,
-        });
-
-        console.log(
-          `Subscription renewed for user: ${resolvedUserId}, new end: ${periodEnd}`,
-        );
+    // ================= MONTHLY: 30 days access, one-time =================
+    if (plan === "monthly") {
+      const user = await User.findById(resolvedUserId);
+      if (!user) {
+        console.error("Monthly payment: user not found", resolvedUserId);
+        return res.status(200).send("Ignored");
       }
-    }
 
-    if (event.type === "subscription.cancelled") {
-      const resolvedUserId = await resolveUser();
-      if (resolvedUserId) {
-        await User.findByIdAndUpdate(resolvedUserId, {
-          "subscription.status": "cancelled",
-        });
-        console.log(
-          `Subscription cancelled (access continues till period end) for user: ${resolvedUserId}`,
-        );
-      }
-    }
+      // If user buys again while still active, extend from the current end date
+      const now = Date.now();
+      const currentEnd = user.subscription?.currentPeriodEnd
+        ? new Date(user.subscription.currentPeriodEnd).getTime()
+        : 0;
+      const isStillActiveMonthly =
+        user.subscription?.plan === "monthly" && currentEnd > now;
+      const base = isStillActiveMonthly ? currentEnd : now;
+      const newEnd = new Date(base + MONTHLY_DAYS * MS_PER_DAY);
 
-    if (
-      event.type === "subscription.expired" ||
-      event.type === "subscription.failed"
-    ) {
-      const resolvedUserId = await resolveUser();
-      if (resolvedUserId) {
-        await User.findByIdAndUpdate(resolvedUserId, {
-          "subscription.status": "expired",
-        });
-        console.log(`Subscription ${event.type} for user: ${resolvedUserId}`);
-      }
+      // Same paymentId can't be applied twice (webhook retries)
+      const result = await User.updateOne(
+        {
+          _id: resolvedUserId,
+          "subscription.packPaymentIds": { $ne: paymentId },
+        },
+        {
+          $set: {
+            "subscription.plan": "monthly",
+            "subscription.status": "active",
+            "subscription.currentPeriodEnd": newEnd,
+            "subscription.dodoCustomerId": customerId,
+          },
+          $unset: { "subscription.dodoSubscriptionId": "" },
+          $addToSet: { "subscription.packPaymentIds": paymentId },
+        },
+      );
+
+      console.log(
+        result.modifiedCount
+          ? `Monthly activated for user: ${resolvedUserId}, ends: ${newEnd}`
+          : `Monthly payment ${paymentId} already processed, skipping`,
+      );
+
+      return res.status(200).send("Secure Webhook processed successfully");
     }
 
     res.status(200).send("Secure Webhook processed successfully");

@@ -12,23 +12,35 @@ export const updateProfile = async (req, res) => {
     const userId = req.user._id;
     const { name, bio } = req.body || {};
 
-    // Build update object — only fields that were actually sent
     const updates = {};
 
     if (name) updates.username = name.trim();
-    if (bio) updates.bio = bio.trim();
 
-    if (bio.length > 2000) {
+    if (bio !== undefined) {
+      const trimmedBio = bio.trim();
+
+      if (trimmedBio.length > 2000) {
+        return res.status(400).json({
+          success: false,
+          message: "Bio cannot exceed 2000 characters.",
+        });
+      }
+
+      updates.bio = trimmedBio;
+    }
+
+    // Agar koi field hi nahi aaya to early return
+    if (Object.keys(updates).length === 0) {
       return res.status(400).json({
         success: false,
-        message: "Bio cannot exceed 2000 characters.",
+        message: "No fields provided to update",
       });
     }
 
     const updatedUser = await User.findByIdAndUpdate(
       userId,
       { $set: updates },
-      { new: true }, // 'new' is the standard Mongoose equivalent of returnDocument: "after"
+      { returnDocument: "after" },
     );
 
     if (!updatedUser) {
@@ -82,7 +94,8 @@ export const updateBannerPicture = async (req, res) => {
         .json({ success: false, message: "User not found." });
     }
 
-    const isPro = hasActivePaidPlan(user.subscription);
+    // usage bhi pass karna zaroori hai (pack ke liye packMessagesLeft check hota hai)
+    const isPro = hasActivePaidPlan(user.subscription, user.usage);
     if (!isPro) {
       return res.status(403).json({
         success: false,
@@ -108,7 +121,7 @@ export const updateBannerPicture = async (req, res) => {
           "profileCustomizationSettings.bannerImage": imageKitResult.url,
         },
       },
-      { new: true },
+      { returnDocument: "after" },
     );
 
     return res.status(200).json({
@@ -156,7 +169,7 @@ export const updateProfilePicture = async (req, res) => {
         .json({ success: false, message: "User not found." });
     }
 
-    const isPro = hasActivePaidPlan(user.subscription);
+    const isPro = hasActivePaidPlan(user.subscription, user.usage);
     if (!isPro) {
       return res.status(403).json({
         success: false,
@@ -182,7 +195,7 @@ export const updateProfilePicture = async (req, res) => {
           profilePicture: imageKitResult.url,
         },
       },
-      { new: true },
+      { returnDocument: "after" },
     );
 
     return res.status(200).json({
@@ -223,8 +236,8 @@ export const customizeProfileSettings = async (req, res) => {
         .json({ success: false, message: "User not found." });
     }
 
-    // Optional Backend check: Ensure only Pro members can update banner
-    const isPro = hasActivePaidPlan(user.subscription);
+    // Backend check: sirf Pro members (monthly ya pack) customize kar sakte hain
+    const isPro = hasActivePaidPlan(user.subscription, user.usage);
     if (!isPro) {
       return res.status(403).json({
         success: false,
@@ -270,7 +283,7 @@ export const customizeProfileSettings = async (req, res) => {
     const updatedUser = await User.findByIdAndUpdate(
       userId,
       { $set: updates },
-      { new: true },
+      { returnDocument: "after" },
     );
 
     if (!updatedUser) {

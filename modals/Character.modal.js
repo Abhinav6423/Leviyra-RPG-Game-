@@ -103,7 +103,7 @@ const characterSchema = new Schema(
         // ── 5. VISIBILITY & PUBLISHING ──
         isPublic: {
             type: Boolean,
-            default: false 
+            default: true 
         },
         hideDescription: {
             type: Boolean,

@@ -3,17 +3,17 @@ import * as nsfwjs from "nsfwjs";
 import * as cocoSsd from "@tensorflow-models/coco-ssd";
 
 let nsfwModel = null;
-// let cocoModel = null;
+let cocoModel = null;
 let loadingPromise = null;
 
-// ✅ Load models ONLY once (singleton)
+// ✅ Load models ONLY once
 export const loadModels = async () => {
-  if (nsfwModel) return;
+  if (nsfwModel && cocoModel) return;
 
   if (!loadingPromise) {
     loadingPromise = (async () => {
       nsfwModel = await nsfwjs.load();
-      // cocoModel = await cocoSsd.load();
+      cocoModel = await cocoSsd.load();
       console.log("✅ Models loaded");
     })();
   }
@@ -21,7 +21,6 @@ export const loadModels = async () => {
   return loadingPromise;
 };
 
-// 🔥 Convert file → image
 const loadImage = (file) => {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -31,50 +30,74 @@ const loadImage = (file) => {
   });
 };
 
-// 🔥 NSFW CHECK (balanced)
+// 🔥 NSFW CHECK — Only block COMPLETE NUDITY / explicit porn
 export const isNsfw = async (img) => {
   const predictions = await nsfwModel.classify(img);
 
+  const porn =
+    predictions.find((p) => p.className === "Porn")?.probability || 0;
+  const hentai =
+    predictions.find((p) => p.className === "Hentai")?.probability || 0;
+  const sexy =
+    predictions.find((p) => p.className === "Sexy")?.probability || 0;
+  const drawing =
+    predictions.find((p) => p.className === "Drawing")?.probability || 0;
 
-  const unsafe = predictions.some(p =>
-    (p.className === "Porn" && p.probability > 0.70) ||
-    (p.className === "Hentai" && p.probability > 0.90)
-  );
+  // Very strict: only block when it's clearly full nude / explicit
+  // Bikini, panty, lingerie, tight clothes = allowed
+  const isExplicitNude =
+    porn > 0.65 || // Real explicit porn
+    (hentai > 0.88 && drawing < 0.3); // Strong explicit hentai (full nude)
 
-  return unsafe;
+  // Sexy class is completely ignored (bikini, lingerie, etc. allowed)
+  return isExplicitNude;
 };
 
-// 🔥 HUMAN CHECK
-// export const hasHuman = async (img) => {
-//   const predictions = await cocoModel.detect(img);
+// 🔥 REAL HUMAN CHECK
+export const hasRealHuman = async (img) => {
+  const [cocoPreds, nsfwPreds] = await Promise.all([
+    cocoModel.detect(img),
+    nsfwModel.classify(img),
+  ]);
 
-//   const person = predictions.find(p => p.class === "person");
+  const person = cocoPreds.find((p) => p.class === "person");
+  const drawing =
+    nsfwPreds.find((p) => p.className === "Drawing")?.probability || 0;
 
-//   if (!person) return false;
+  // Real human only when:
+  // - COCO is highly confident
+  // - AND it's not a drawing/anime
+  if (person && person.score >= 0.9 && drawing < 0.35) {
+    return true;
+  }
 
-//   // 🔥 ignore low/medium confidence (anime usually here)
-//   if (person.score < 0.9) return false;
+  return false;
+};
 
-//   return true;
-// };
-
-// 🚀 FINAL SAFE FUNCTION (NO CRASH EVER)
+// 🚀 FINAL FUNCTION
 export const checkImageSafety = async (file) => {
-  // ✅ always ensure models are ready
   await loadModels();
 
   const img = await loadImage(file);
 
-  const [nsfw] = await Promise.all([
-    isNsfw(img),
-    // hasHuman(img),
-  ]);
+  const [nsfw, realHuman] = await Promise.all([isNsfw(img), hasRealHuman(img)]);
+
+  if (realHuman) {
+    return {
+      allowed: false,
+      reason: "Real human detected",
+    };
+  }
+
+  if (nsfw) {
+    return {
+      allowed: false,
+      reason: "Complete nude / explicit content detected",
+    };
+  }
 
   return {
-    allowed: !(nsfw),
-    reason: nsfw
-      ? "NSFW content detected"
-
-      : "Safe image",
+    allowed: true,
+    reason: "Safe image",
   };
 };

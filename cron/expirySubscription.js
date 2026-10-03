@@ -1,28 +1,47 @@
 import cron from "node-cron";
 import User from "../modals/User.modal.js";
 
-// Runs every night at 12:05 AM (server timezone)
 export const startSubscriptionExpiryCron = () => {
-    cron.schedule("5 0 * * *", async () => {
-        try {
-            // Un users ko dhoondo jinka time aaj se peechhe ja chuka hai aur wo abhi bhi 'active' hain
-            const result = await User.updateMany(
-                {
-                    "subscription.status": "active",
-                    "subscription.currentPeriodEnd": { $lt: new Date() },
-                },
-                {
-                    // Unka time aage MAT badhao. Unko seedha expire kar do. 
-                    // Agar unhone pay kiya hota, toh webhook pehle hi time badha chuka hota.
-                    $set: {
-                        "subscription.status": "expired" 
-                    }
-                }
-            );
+  cron.schedule("5 * * * *", async () => {
+    try {
+      const now = new Date();
 
-            console.log(`⏰ Cron: ${result.modifiedCount} subscriptions expired safely.`);
-        } catch (err) {
-            console.error("Cron expiry job failed:", err.message);
-        }
-    });
+      // 1) MONTHLY: period ended -> back to free (no auto-renew, so no grace needed)
+      const monthly = await User.updateMany(
+        {
+          "subscription.plan": "monthly",
+          "subscription.currentPeriodEnd": { $lt: now },
+        },
+        {
+          $set: {
+            "subscription.status": "expired",
+            "subscription.plan": "free",
+          },
+          $unset: { "subscription.currentPeriodEnd": "" },
+        },
+      );
+
+      // 2) PACK safety net: messages hit 0 but plan is still pack -> free
+      const pack = await User.updateMany(
+        {
+          "subscription.plan": "pack",
+          "usage.packMessagesLeft": { $lte: 0 },
+        },
+        {
+          $set: {
+            "subscription.status": "expired",
+            "subscription.plan": "free",
+          },
+        },
+      );
+
+      if (monthly.modifiedCount > 0 || pack.modifiedCount > 0) {
+        console.log(
+          `⏰ Cron: ${monthly.modifiedCount} monthly + ${pack.modifiedCount} pack downgraded to free.`,
+        );
+      }
+    } catch (err) {
+      console.error("Cron expiry job failed:", err.message);
+    }
+  });
 };

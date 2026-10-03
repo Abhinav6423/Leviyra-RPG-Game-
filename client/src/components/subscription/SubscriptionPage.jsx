@@ -5,39 +5,55 @@ import { auth } from "../../firebase.js";
 
 // Plan config — yahan se hi pricing/labels change ho jaate hain dono jagah
 const PLANS = {
-    weekly: {
-        endpoint: "/api/payments/checkout/weekly",
-        title: "7-Day Pass",
-        subtitle: "Perfect for binge-reading",
-        price: "$5",
-        priceNote: "Billed as ₹415 INR",
-        renewLabel: "Auto-renews weekly, cancel anytime",
-        badge: "Best Value",
+    pack: {
+        endpoint: "/api/payments/checkout/pack",
+        tabLabel: "1000 Pack",
+        title: "1000 Message Pack",
+        subtitle: "One-time purchase, no expiry",
+        price: "$5", // <-- apni asli pack price yahan rakho (Dodo product ke saath match)
+        priceNote: "Billed as ₹415 INR, one time",
+        badge: "Pay Once",
+        headline: "1000 Messages",
+        headlineDesc: "Use them at your own pace. No time limit, no reset, they stay until you use all 1000.",
+        checklist: [
+            "All Pro Features Included",
+            "No expiry, use anytime",
+            "One-time payment, no auto-renew",
+        ],
     },
     monthly: {
         endpoint: "/api/payments/checkout/monthly",
+        tabLabel: "Monthly",
         title: "30-Day Pass",
         subtitle: "For regular readers",
         price: "$15",
         priceNote: "Billed as ₹1245 INR",
-        renewLabel: "Auto-renews monthly, cancel anytime",
         badge: "Most Popular",
+        headline: "Unlimited Messages",
+        headlineDesc: "Keep the story going without ever hitting a daily cap or paywall interrupt.",
+        checklist: [
+            "All Pro Features Included",
+            "Auto-renews monthly, cancel anytime",
+            "Cancel anytime",
+        ],
     },
 };
 
 const SubscriptionPage = () => {
     const navigate = useNavigate();
     const [subLoading, setSubLoading] = useState(false);
-    const [selectedPlan, setSelectedPlan] = useState("weekly"); // 👈 NAYA: weekly/monthly toggle
+    const [selectedPlan, setSelectedPlan] = useState("pack");
+    const [error, setError] = useState("");
 
     const plan = PLANS[selectedPlan];
 
     // ==========================================
-    // 💳 SUBSCRIBE HANDLER (ab dynamic endpoint use karta hai)
+    // 💳 SUBSCRIBE HANDLER (dynamic endpoint)
     // ==========================================
     const handleSubscribe = async () => {
         try {
             setSubLoading(true);
+            setError("");
             const token = await auth.currentUser.getIdToken();
 
             const res = await fetch(plan.endpoint, {
@@ -52,10 +68,12 @@ const SubscriptionPage = () => {
             if (data.checkoutUrl) {
                 window.location.href = data.checkoutUrl;
             } else {
-                console.error("No checkout URL returned:", data);
+                // backend ka message dikhao (jaise "already have monthly plan")
+                setError(data.message || "Could not start checkout. Please try again.");
             }
         } catch (err) {
             console.error("Subscribe Error:", err);
+            setError("Something went wrong. Please try again.");
         } finally {
             setSubLoading(false);
         }
@@ -106,13 +124,14 @@ const SubscriptionPage = () => {
 
                     {/* Feature Highlights */}
                     <div className="flex flex-col gap-6 w-full max-w-sm">
+                        {/* Ye block selected plan ke hisaab se badalta hai */}
                         <div className="flex items-start gap-4 text-left">
                             <div className="p-2.5 rounded-xl bg-white/5 border border-white/10 text-white shrink-0">
                                 <Infinity size={20} />
                             </div>
                             <div>
-                                <h4 className="text-white font-semibold text-[15px] mb-1">Unlimited Messages</h4>
-                                <p className="text-zinc-500 text-sm leading-relaxed">Keep the story going without ever hitting a daily cap or paywall interrupt.</p>
+                                <h4 className="text-white font-semibold text-[15px] mb-1">{plan.headline}</h4>
+                                <p className="text-zinc-500 text-sm leading-relaxed">{plan.headlineDesc}</p>
                             </div>
                         </div>
 
@@ -141,26 +160,24 @@ const SubscriptionPage = () => {
                 {/* ── RIGHT COLUMN: PRICING CARD ── */}
                 <div className="w-full lg:w-1/2 flex flex-col items-center lg:items-end gap-6 pb-12 lg:pb-0">
 
-                    {/* 👇 NAYA: Weekly / Monthly Toggle */}
+                    {/* Pack / Monthly Toggle */}
                     <div className="w-full max-w-[420px] flex items-center gap-1 p-1 rounded-2xl bg-white/5 border border-white/10">
-                        <button
-                            onClick={() => setSelectedPlan("weekly")}
-                            className={`flex-1 py-2.5 rounded-xl text-sm font-bold tracking-wide transition-all duration-200 ${selectedPlan === "weekly"
-                                    ? "bg-white text-black shadow-lg"
-                                    : "text-zinc-400 hover:text-white"
+                        {Object.entries(PLANS).map(([key, p]) => (
+                            <button
+                                key={key}
+                                onClick={() => {
+                                    setSelectedPlan(key);
+                                    setError("");
+                                }}
+                                className={`flex-1 py-2.5 rounded-xl text-sm font-bold tracking-wide transition-all duration-200 ${
+                                    selectedPlan === key
+                                        ? "bg-white text-black shadow-lg"
+                                        : "text-zinc-400 hover:text-white"
                                 }`}
-                        >
-                            Weekly
-                        </button>
-                        <button
-                            onClick={() => setSelectedPlan("monthly")}
-                            className={`flex-1 py-2.5 rounded-xl text-sm font-bold tracking-wide transition-all duration-200 ${selectedPlan === "monthly"
-                                    ? "bg-white text-black shadow-lg"
-                                    : "text-zinc-400 hover:text-white"
-                                }`}
-                        >
-                            Monthly
-                        </button>
+                            >
+                                {p.tabLabel}
+                            </button>
+                        ))}
                     </div>
 
                     {/* Gradient Border Wrapper */}
@@ -197,24 +214,14 @@ const SubscriptionPage = () => {
 
                                 {/* Checklist */}
                                 <div className="space-y-4 mb-10 pt-8 border-t border-white/5">
-                                    <div className="flex items-center gap-3">
-                                        <div className="w-5 h-5 rounded-full bg-[#EC0618]/20 flex items-center justify-center shrink-0">
-                                            <Check size={12} className="text-[#EC0618]" strokeWidth={3} />
+                                    {plan.checklist.map((item) => (
+                                        <div key={item} className="flex items-center gap-3">
+                                            <div className="w-5 h-5 rounded-full bg-[#EC0618]/20 flex items-center justify-center shrink-0">
+                                                <Check size={12} className="text-[#EC0618]" strokeWidth={3} />
+                                            </div>
+                                            <span className="text-zinc-200 text-[15px] font-medium">{item}</span>
                                         </div>
-                                        <span className="text-zinc-200 text-[15px] font-medium">All Pro Features Included</span>
-                                    </div>
-                                    <div className="flex items-center gap-3">
-                                        <div className="w-5 h-5 rounded-full bg-[#EC0618]/20 flex items-center justify-center shrink-0">
-                                            <Check size={12} className="text-[#EC0618]" strokeWidth={3} />
-                                        </div>
-                                        <span className="text-zinc-200 text-[15px] font-medium">{plan.renewLabel}</span>
-                                    </div>
-                                    <div className="flex items-center gap-3">
-                                        <div className="w-5 h-5 rounded-full bg-[#EC0618]/20 flex items-center justify-center shrink-0">
-                                            <Check size={12} className="text-[#EC0618]" strokeWidth={3} />
-                                        </div>
-                                        <span className="text-zinc-200 text-[15px] font-medium">Cancel anytime</span>
-                                    </div>
+                                    ))}
                                 </div>
 
                                 {/* Actions */}
@@ -236,6 +243,10 @@ const SubscriptionPage = () => {
                                             </>
                                         )}
                                     </button>
+
+                                    {error && (
+                                        <p className="text-center text-sm text-rose-400">{error}</p>
+                                    )}
 
                                     <button
                                         onClick={() => navigate(-1)}

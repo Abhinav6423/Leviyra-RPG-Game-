@@ -1,53 +1,98 @@
-import { Terminal } from "lucide-react"; // Make sure your icon is imported
+import React, { useState, useEffect } from "react";
 
-export default function Loader() {
+const narrativePhases = [
+    "Weaving narrative threads...",
+    "Summoning character profiles...",
+    "Generating dynamic environments...",
+    "Rolling initial fate dice..."
+];
+
+export default function EnhancedLoader() {
+    const [phaseIndex, setPhaseIndex] = useState(0);
+
+    useEffect(() => {
+        const interval = setInterval(() => {
+            setPhaseIndex((prev) => (prev + 1) % narrativePhases.length);
+        }, 1000);
+        return () => clearInterval(interval);
+    }, []);
+
     return (
-        <div className="fixed inset-0 z-[100] bg-[#020503] flex flex-col items-center justify-center font-mono overflow-hidden">
+        <div className="fixed inset-0 z-[100] bg-[#050505] flex flex-col items-center justify-center font-sans overflow-hidden">
             
-            {/* 1. Subtle Tech Grid Background */}
-            <div className="absolute inset-0 opacity-[0.03] bg-[linear-gradient(#39ff14_1px,transparent_1px),linear-gradient(90deg,#39ff14_1px,transparent_1px)] bg-[size:32px_32px] pointer-events-none" />
-            
-            {/* 2. CRT/Scanline Overlay for vintage tech feel */}
-            <div className="absolute inset-0 bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%)] bg-[length:100%_4px] z-0 pointer-events-none opacity-20" />
+            {/* 1. Dynamic Aurora / Magical Mist Background */}
+            <div className="absolute inset-0 overflow-hidden pointer-events-none">
+                <div className="absolute -top-[20%] -left-[10%] w-[70vw] h-[70vw] rounded-full bg-emerald-900/20 blur-[120px] animate-[pulse_6s_ease-in-out_infinite]" />
+                <div className="absolute top-[40%] -right-[10%] w-[60vw] h-[60vw] rounded-full bg-blue-900/10 blur-[100px] animate-[pulse_8s_ease-in-out_infinite_alternate]" />
+            </div>
 
-            {/* Ambient Core Glow */}
-            <div className="absolute w-[300px] h-[300px] bg-[#39ff14]/10 rounded-full blur-[120px] pointer-events-none" />
-
-            <div className="relative z-10 flex flex-col items-center gap-8">
+            {/* 2. Glassmorphism Central Core */}
+            <div className="relative z-10 flex flex-col items-center gap-10 p-12 rounded-3xl backdrop-blur-md border border-white/5 bg-black/20 shadow-2xl">
                 
-                {/* 3. Gamified HUD Core */}
-                <div className="relative flex items-center justify-center w-24 h-24">
-                    {/* Outer spinning targeting ring */}
-                    <div className="absolute inset-0 rounded-full border border-dashed border-[#39ff14]/30 animate-[spin_6s_linear_infinite]" />
-                    {/* Inner pulsing energy ring */}
-                    <div className="absolute inset-2 rounded-full border border-[#39ff14]/20 bg-[#39ff14]/5 animate-ping opacity-50 duration-1000" />
-                    {/* Core Icon */}
-                    <Terminal size={32} className="text-[#39ff14] drop-shadow-[0_0_10px_rgba(57,255,20,0.6)]" />
+                {/* 3. Arcane / Neural Ring Animation */}
+                <div className="relative flex items-center justify-center w-32 h-32">
+                    {/* Outer slow spinning rune/tech ring */}
+                    <div className="absolute inset-0 rounded-full border-[2px] border-dashed border-[#00e676]/40 animate-[spin_8s_linear_infinite]" />
+                    {/* Middle reverse spinning ring */}
+                    <div className="absolute inset-2 rounded-full border border-[#00e676]/20 animate-[spin_4s_linear_infinite_reverse]" />
+                    {/* Inner glowing pulse */}
+                    <div className="absolute inset-6 rounded-full bg-gradient-to-tr from-[#00e676]/20 to-transparent blur-md animate-pulse" />
+                    
+                    {/* Brand Core */}
+                    <div className="absolute flex items-center justify-center w-12 h-12 bg-[#111] rounded-lg shadow-[0_0_20px_rgba(0,230,118,0.3)] border border-white/10 z-20">
+                        <span className="text-3xl font-black text-white tracking-tighter">L</span>
+                    </div>
                 </div>
-                
-                <div className="flex flex-col items-center gap-3">
-                    {/* 4. Two-Tone System Title */}
-                    <h1 className="text-white font-black tracking-[0.3em] text-2xl sm:text-3xl uppercase drop-shadow-[0_0_10px_rgba(255,255,255,0.1)]">
-                        LEVIYRA<span className="text-[#39ff14]">_OS</span>
+
+                <div className="flex flex-col items-center gap-5 w-full">
+                    <h1 className="text-4xl font-bold tracking-tight text-white drop-shadow-md">
+                        Leviyra
                     </h1>
                     
-                    {/* 5. Minimalist Cyberpunk Progress Bar */}
-                    <div className="w-56 h-[2px] bg-white/10 relative overflow-hidden mt-1">
-                        {/* Note: This uses arbitrary Tailwind values for a simulated load animation */}
-                        <div className="absolute top-0 left-0 h-full bg-[#39ff14] shadow-[0_0_8px_#39ff14] w-full origin-left animate-[pulse_1.5s_ease-in-out_infinite]" style={{ animation: "pulse 1.5s ease-in-out infinite, scale-x 2s ease-in-out infinite alternate" }} />
+                    {/* 4. Elegant Glowing Track */}
+                    <div className="relative w-72 h-[3px] bg-white/10 rounded-full overflow-hidden">
+                        <div 
+                            className="absolute top-0 left-0 h-full bg-gradient-to-r from-transparent via-[#00e676] to-transparent w-full"
+                            style={{ 
+                                animation: "shimmer 1.5s infinite linear",
+                            }}
+                        />
+                        {/* 
+                          Add to your global CSS or Tailwind config:
+                          @keyframes shimmer {
+                              0% { transform: translateX(-100%); }
+                              100% { transform: translateX(100%); }
+                          }
+                        */}
                     </div>
-                    
-                    {/* Subtext with strict Terminal blinking cursor */}
-                    <div className="flex items-center text-[10px] sm:text-xs tracking-[0.2em] uppercase text-[#39ff14]/70 mt-2">
-                        <span>Initializing_Neural_Link</span>
-                        <span className="inline-block w-2 h-3.5 bg-[#39ff14] ml-2 animate-[pulse_0.8s_step-end_infinite] shadow-[0_0_5px_#39ff14]" />
+
+                    {/* 5. Animated Microcopy */}
+                    <div className="h-6 overflow-hidden relative w-full text-center mt-2">
+                        <p 
+                            key={phaseIndex} 
+                            className="text-sm font-medium text-gray-400 tracking-wide animate-[fadeInUp_0.3s_ease-out_forwards]"
+                        >
+                            {narrativePhases[phaseIndex]}
+                        </p>
+                        {/* 
+                          Add to global CSS:
+                          @keyframes fadeInUp {
+                              0% { opacity: 0; transform: translateY(10px); }
+                              100% { opacity: 1; transform: translateY(0); }
+                          }
+                        */}
                     </div>
                 </div>
             </div>
-            
-            {/* Corner Decorative Elements */}
-            <div className="absolute bottom-6 right-6 text-[8px] text-[#39ff14]/40 font-mono tracking-widest uppercase">
-                SYS.V.1.0.4
+
+            {/* 6. Monetization / Progression Teaser */}
+            <div className="absolute bottom-8 z-10 flex flex-col items-center gap-3 transition-opacity hover:opacity-100 opacity-70">
+                <p className="text-xs text-gray-500 uppercase tracking-[0.2em] font-semibold">
+                    Skip the wait. Unlock endless realms.
+                </p>
+                <button className="px-6 py-2 rounded-full bg-gradient-to-r from-[#8b6b22] to-[#d4af37] text-black text-xs font-bold uppercase tracking-widest shadow-[0_0_15px_rgba(212,175,55,0.2)] hover:scale-105 transition-transform">
+                    Go Pro
+                </button>
             </div>
         </div>
     );

@@ -1,18 +1,28 @@
 import { useMemo } from "react";
 
-export const useSubscriptionTier = (subscription) => {
-  // 1. Calculation useMemo ke bahar rakho.
-  // Isse har baar component render hone par ekdum fresh Date() milega.
-  const isPro =
-    (subscription?.status === "active" ||
-      subscription?.status === "cancelled") &&
-    new Date(subscription?.currentPeriodEnd) > new Date(); // 👈 Your Security Check
-  const plan = subscription?.plan;
-  const subTier =
-    plan === "monthly" ? "monthly" : plan === "weekly" ? "weekly" : "free"; // 2. Sirf final object ko useMemo mein wrap karo.
-  // Isse Referential Equality bani rahegi aur child components faltu re-render nahi honge.
+const GRACE_MS = 24 * 60 * 60 * 1000; // backend jaisa hi
 
-  return useMemo(() => {
-    return { isPro, subTier };
-  }, [isPro, subTier]);
+export const useSubscriptionTier = (subscription, usage) => {
+  const plan = subscription?.plan;
+  const status = subscription?.status;
+
+  // MONTHLY: active (auto-renew, grace ke saath) ya cancelled (grace nahi)
+  const isMonthlyPro =
+    plan === "monthly" &&
+    (status === "active" || status === "cancelled") &&
+    Boolean(subscription?.currentPeriodEnd) &&
+    new Date(subscription.currentPeriodEnd).getTime() +
+      (status === "active" ? GRACE_MS : 0) >
+      Date.now();
+
+  // PACK: active + messages bache hain (koi time limit nahi)
+  const isPackPro =
+    plan === "pack" &&
+    status === "active" &&
+    (usage?.packMessagesLeft ?? 0) > 0;
+
+  const isPro = isMonthlyPro || isPackPro;
+  const subTier = isMonthlyPro ? "monthly" : isPackPro ? "pack" : "free";
+
+  return useMemo(() => ({ isPro, subTier }), [isPro, subTier]);
 };

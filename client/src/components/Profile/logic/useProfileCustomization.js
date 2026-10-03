@@ -39,7 +39,7 @@ export const useProfileCustomization = ({ user, subTier, refetchUser }) => {
     (category, itemName, locked) => {
       if (locked) {
         toast.error(
-          `This option requires a ${subTier === "free" ? "Weekly or Monthly" : "Monthly"} plan.`,
+          `This option requires a ${subTier === "free" ? "Pack or Monthly" : "Monthly"} plan.`,
         );
         return;
       }

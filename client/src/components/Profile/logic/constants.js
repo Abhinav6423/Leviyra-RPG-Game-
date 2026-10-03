@@ -75,38 +75,40 @@ export const THEME_ACCENT = {
   },
 };
 
+// tier: "pack" = message pack users ko milta hai (pehle "weekly" tha)
+//       "monthly" = sirf monthly users ko
 export const CUSTOMIZATION_DATA = {
   theme: [
-    { name: "Slate", tier: "weekly" },
-    { name: "Graphite", tier: "weekly" },
-    { name: "Pearl", tier: "weekly" },
+    { name: "Slate", tier: "pack" },
+    { name: "Graphite", tier: "pack" },
+    { name: "Pearl", tier: "pack" },
     { name: "Obsidian", tier: "monthly" },
     { name: "Indigo", tier: "monthly" },
   ],
   button: [
-    { name: "Soft Rounded", tier: "weekly" },
-    { name: "Outline", tier: "weekly" },
-    { name: "Ghost", tier: "weekly" },
+    { name: "Soft Rounded", tier: "pack" },
+    { name: "Outline", tier: "pack" },
+    { name: "Ghost", tier: "pack" },
     { name: "Elevated", tier: "monthly" },
     { name: "Glass", tier: "monthly" },
   ],
   tag: [
-    { name: "Creator", tier: "weekly" },
-    { name: "Storyteller", tier: "weekly" },
-    { name: "Contributor", tier: "weekly" },
+    { name: "Creator", tier: "pack" },
+    { name: "Storyteller", tier: "pack" },
+    { name: "Contributor", tier: "pack" },
     { name: "Verified Creator", tier: "monthly" },
     { name: "Featured Author", tier: "monthly" },
   ],
   ringColor: [
-    { name: "Classic White", tier: "weekly", color: "#ffffff" },
-    { name: "Ice Blue", tier: "weekly", color: "#38bdf8" },
-    { name: "Emerald", tier: "weekly", color: "#10b981" },
+    { name: "Classic White", tier: "pack", color: "#ffffff" },
+    { name: "Ice Blue", tier: "pack", color: "#38bdf8" },
+    { name: "Emerald", tier: "pack", color: "#10b981" },
     { name: "Gold", tier: "monthly", color: "#d4a054" },
     { name: "Royal Purple", tier: "monthly", color: "#a855f7" },
   ],
   ringThickness: [
-    { name: "Thin", tier: "weekly", width: 2 },
-    { name: "Medium", tier: "weekly", width: 3 },
+    { name: "Thin", tier: "pack", width: 2 },
+    { name: "Medium", tier: "pack", width: 3 },
     { name: "Bold", tier: "monthly", width: 5 },
   ],
 };
@@ -121,7 +123,7 @@ export const DEFAULT_ACCENT_BY_TIER = {
     bioBox: "bg-white/[0.03] border border-amber-400/30",
     avatarRing: "border-amber-400/90",
   },
-  weekly: {
+  pack: {
     themeColor: "text-slate-200",
     bgHighlight: "bg-slate-300",
     buttonSolid: "bg-white hover:bg-zinc-200 text-black border-white",
@@ -158,6 +160,4 @@ export const FILTER_TABS = [
   { id: "All", icon: LayoutGrid, label: "All" },
   { id: "Draft", icon: PenTool, label: "Drafts" },
   { id: "Published", icon: Globe, label: "Published" },
-  { id: "Public", icon: Eye, label: "Public" },
-  { id: "Private", icon: Lock, label: "Private" },
 ];

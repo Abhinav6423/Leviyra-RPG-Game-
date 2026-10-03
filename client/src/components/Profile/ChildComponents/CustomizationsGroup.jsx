@@ -1,6 +1,8 @@
 import React, { useCallback } from "react";
 import { Lock, Check } from "lucide-react";
 
+const TIER_RANK = { free: 0, pack: 1, monthly: 2 };
+
 const CustomizationGroup = React.memo(
   ({
     categoryKey,
@@ -13,12 +15,10 @@ const CustomizationGroup = React.memo(
     onSelect,
     renderSwatch,
   }) => {
+    // monthly -> sab unlocked, pack -> sirf pack items, free -> sab locked
     const isLocked = useCallback(
-      (requiredTier) => {
-        if (subTier === "monthly") return false;
-        if (subTier === "weekly") return requiredTier !== "weekly";
-        return true;
-      },
+      (requiredTier) =>
+        (TIER_RANK[subTier] ?? 0) < (TIER_RANK[requiredTier] ?? 0),
       [subTier]
     );
 
@@ -36,7 +36,7 @@ const CustomizationGroup = React.memo(
           {items.map((item, idx) => {
             const locked = isLocked(item.tier);
             const isSelected = selections[categoryKey] === item.name;
-            
+
             return (
               <button
                 key={idx}

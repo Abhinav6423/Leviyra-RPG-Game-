@@ -101,10 +101,29 @@ export function useMessageActions({ characterId, setMessages, reload }) {
   const [pendingDelete, setPendingDelete] = useState(null);
   const [pendingEdit, setPendingEdit] = useState(null);
 
+  // Takes a snapshot of the current messages (call BEFORE any optimistic
+  // update) and returns a function that restores it. If the snapshot is
+  // somehow unavailable, falls back to re-syncing from the server.
+  const snapshotMessages = () => {
+    let snapshot;
+    setMessages((prev) => {
+      snapshot = prev;
+      return prev;
+    });
+    return () => {
+      if (snapshot) setMessages(snapshot);
+      else reload(false);
+    };
+  };
+
+  // streamFn throws on failure (network error, non-OK response,
+  // LimitReachedError, ...). On any failure we run rollbackFn so the UI
+  // returns to its pre-action state, then show the right error.
   const runStream = async (streamFn, rollbackFn) => {
     setIsSending(true);
     setStreamingText("");
     setActionError("");
+    setLimitError("");
     try {
       await streamFn(
         (chunk) => setStreamingText((prev) => prev + chunk),
@@ -112,7 +131,11 @@ export function useMessageActions({ characterId, setMessages, reload }) {
       );
       await reload(false);
     } catch (err) {
-      rollbackFn?.();
+      try {
+        rollbackFn?.();
+      } catch (rollbackErr) {
+        console.error("Rollback failed:", rollbackErr);
+      }
       if (err instanceof LimitReachedError) {
         setLimitError(err.message || "You've reached your message limit.");
       } else {
@@ -132,6 +155,7 @@ export function useMessageActions({ characterId, setMessages, reload }) {
     const rollToSend = diceRoll;
     setDiceRoll(null);
 
+    const restoreMessages = snapshotMessages();
     const tempId = `temp-${Date.now()}`;
     setMessages((prev) => [
       ...prev,
@@ -139,7 +163,7 @@ export function useMessageActions({ characterId, setMessages, reload }) {
     ]);
 
     const rollback = () => {
-      setMessages((prev) => prev.filter((m) => m._id !== tempId));
+      restoreMessages();
       setInputValue(content);
       setDiceRoll(rollToSend);
     };
@@ -151,15 +175,21 @@ export function useMessageActions({ characterId, setMessages, reload }) {
     );
   };
 
+  // Replay / Continue don't change messages optimistically, but a failed
+  // call may leave partial server state, so re-sync from the server.
   const handleReplay = (hasMessages) => {
     if (isSending || !hasMessages) return;
-    runStream((onChunk, onMood) => replayMessage(characterId, onChunk, onMood));
+    runStream(
+      (onChunk, onMood) => replayMessage(characterId, onChunk, onMood),
+      () => reload(false),
+    );
   };
 
   const handleContinue = (hasMessages) => {
     if (isSending || !hasMessages) return;
-    runStream((onChunk, onMood) =>
-      continueMessage(characterId, onChunk, onMood),
+    runStream(
+      (onChunk, onMood) => continueMessage(characterId, onChunk, onMood),
+      () => reload(false),
     );
   };
 
@@ -173,14 +203,18 @@ export function useMessageActions({ characterId, setMessages, reload }) {
     setPendingDelete(null);
     if (!messageId) return;
 
+    const restoreMessages = snapshotMessages();
+
     setMessages((prev) => {
       const targetIndex = prev.findIndex((m) => m._id === messageId);
       if (targetIndex === -1) return prev;
       return prev.slice(0, targetIndex);
     });
 
-    runStream((onChunk, onMood) =>
-      deleteMessage(characterId, messageId, onChunk, onMood),
+    runStream(
+      (onChunk, onMood) =>
+        deleteMessage(characterId, messageId, onChunk, onMood),
+      restoreMessages,
     );
   };
 
@@ -196,6 +230,8 @@ export function useMessageActions({ characterId, setMessages, reload }) {
     setEditValue("");
   };
 
+  // Non-optimistic: the edit box stays open until the request succeeds,
+  // so nothing to roll back on failure.
   const performEdit = async (messageId, value) => {
     if (!value.trim()) return;
     try {
@@ -210,6 +246,8 @@ export function useMessageActions({ characterId, setMessages, reload }) {
 
   const performUserEdit = (messageId, value) => {
     if (!value.trim()) return;
+
+    const restoreMessages = snapshotMessages();
     cancelEdit();
 
     setMessages((prev) => {
@@ -224,8 +262,17 @@ export function useMessageActions({ characterId, setMessages, reload }) {
       return updatedMessages;
     });
 
-    runStream((onChunk, onMood) =>
-      editMessage(messageId, value.trim(), onChunk, onMood),
+    const rollback = () => {
+      restoreMessages();
+      // Re-open the editor with the user's text so nothing they typed is lost.
+      setEditingId(messageId);
+      setEditValue(value);
+    };
+
+    runStream(
+      (onChunk, onMood) =>
+        editMessage(messageId, value.trim(), onChunk, onMood),
+      rollback,
     );
   };
 

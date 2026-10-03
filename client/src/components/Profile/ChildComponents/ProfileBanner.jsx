@@ -9,15 +9,18 @@ const ProfileBanner = ({
   onEditClick,
   onFileChange,
 }) => (
-  <div className="w-full h-56 sm:h-60 md:h-64 lg:h-72 rounded-2xl overflow-hidden relative group shadow-xl bg-zinc-900 border border-white/[0.05]">
+  <div className="w-full h-56 sm:h-60 md:h-64 lg:h-72 rounded-2xl overflow-hidden relative group bg-zinc-900">
     <img
       src={bannerImage}
       alt="Profile Banner"
       loading="lazy"
       decoding="async"
-      className={`w-full h-full object-cover transition-opacity duration-300 ${isUploadingBanner ? "opacity-40" : "opacity-85"}`}
+      className={`w-full h-full object-cover transition-opacity duration-300 ${isUploadingBanner ? "opacity-40" : "opacity-90"}`}
     />
-    <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent"></div>
+
+    {/* Fade the bottom edge into the page background */}
+    <div className="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black via-black/60 to-transparent pointer-events-none" />
+
     <input
       ref={bannerInputRef}
       type="file"
@@ -28,7 +31,7 @@ const ProfileBanner = ({
     <button
       onClick={onEditClick}
       disabled={isUploadingBanner}
-      className="absolute top-3 right-3 sm:top-4 sm:right-4 z-30 flex items-center gap-1.5 px-3 py-1.5 sm:px-3.5 sm:py-2 bg-black/60 hover:bg-black/75 text-white rounded-lg backdrop-blur-md border border-white/10 transition-all opacity-100 sm:opacity-0 sm:group-hover:opacity-100 disabled:cursor-wait"
+      className="absolute top-3 right-3 sm:top-4 sm:right-4 z-30 flex items-center gap-1.5 px-3 py-1.5 bg-black/60 hover:bg-black/80 text-white rounded-lg border border-white/10 transition-all sm:opacity-0 sm:group-hover:opacity-100 disabled:cursor-wait"
     >
       {isPro ? (
         <Edit2 size={13} />

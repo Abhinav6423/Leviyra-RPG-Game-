@@ -44,6 +44,8 @@ const CustomizePanel = ({
     if (!isApplying) onClose();
   }, [isApplying, onClose]);
 
+  console.log("subTier in CustomizePanel:", subTier); // Debugging line to check subTier value
+
   return createPortal(
     <div className="fixed inset-0 z-[999999] flex items-center justify-center sm:p-6 bg-[#0a0a0b] sm:bg-black/70 sm:backdrop-blur-sm">
       <div className="hidden sm:block absolute inset-0" onClick={handleClose} />

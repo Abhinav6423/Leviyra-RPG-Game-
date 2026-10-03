@@ -40,9 +40,10 @@ const Profile = () => {
   const [showCustomizePanel, setShowCustomizePanel] = useState(false);
 
   const { user, refetchUser } = useAuth();
+  console.log("Profile user data:", user); // Debugging line to check user data
   const navigate = useNavigate();
 
-  const { isPro, subTier } = useSubscriptionTier(user?.subscription);
+const { isPro, subTier } = useSubscriptionTier(user?.subscription, user?.usage);
 
   const {
     selections,

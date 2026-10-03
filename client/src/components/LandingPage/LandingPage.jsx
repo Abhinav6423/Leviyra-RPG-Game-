@@ -1,234 +1,171 @@
-import React from 'react';
-import { Terminal, Users, BrainCircuit, Play } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import React from "react";
+import {
+  Terminal,
+  Users,
+  BrainCircuit,
+  Play,
+  Sparkles,
+  MessageSquare,
+  Infinity,
+} from "lucide-react";
+import { Link } from "react-router-dom";
 
 const theme = {
-    bg: '#020503',
-    primary: '#39ff14',
-    secondary: '#22d3ee',
-    textMain: '#e4e4e7',
-    textMuted: '#71717a'
+  bg: "#0a0a0a",
+  primary: "#00c875",
+  secondary: "#22d3ee",
+  textMain: "#f4f4f5",
+  textMuted: "#a1a1aa",
 };
 
 const features = [
-    {
-        icon: <BrainCircuit className="w-7 h-7" />,
-        title: "UNBOUNDED STORIES",
-        description: "No scripts. No rails. Every decision rewrites the world in real-time.",
-        color: '#39ff14',
-        delay: 'delay-[600ms]',
-        borderColor: 'border-[#39ff14]/20 hover:border-[#39ff14]/50',
-        cornerColor: 'border-[#39ff14]',
-    },
-    {
-        icon: <Users className="w-7 h-7" />,
-        title: "LIVING PERSONALITIES",
-        description: "Characters with true memories and complex, evolving psyches.",
-        color: '#22d3ee',
-        delay: 'delay-[750ms]',
-        borderColor: 'border-[#22d3ee]/15 hover:border-[#22d3ee]/40',
-        cornerColor: 'border-[#22d3ee]',
-    },
-    {
-        icon: <Terminal className="w-7 h-7" />,
-        title: "SYSTEM GENERATED WORLD",
-        description: "Dynamic environments that adapt physically to your narrative arc.",
-        color: 'rgba(255,255,255,0.75)',
-        delay: 'delay-[900ms]',
-        borderColor: 'border-white/8 hover:border-white/22',
-        cornerColor: 'border-white/40',
-    }
+  {
+    icon: <BrainCircuit className="w-6 h-6" />,
+    title: "Unbounded Stories",
+    description:
+      "No scripts. No rails. Every decision rewrites the world in real-time with true narrative freedom.",
+  },
+  {
+    icon: <Users className="w-6 h-6" />,
+    title: "Living Personalities",
+    description:
+      "Characters with memory, emotions, and evolving relationships that feel genuinely alive.",
+  },
+  {
+    icon: <Infinity className="w-6 h-6" />,
+    title: "Endless Worlds",
+    description:
+      "Dynamic environments and systems that adapt to your choices and create unique stories every time.",
+  },
 ];
 
 export default function LandingPage() {
-    return (
-        <div
-            style={{ backgroundColor: theme.bg, color: theme.textMain }}
-            className="min-h-screen font-mono overflow-hidden relative selection:bg-[#39ff14]/20 selection:text-[#39ff14]"
-        >
-            {/* ── BACKGROUND LAYERS ── */}
+  return (
+    <div
+      style={{ backgroundColor: theme.bg, color: theme.textMain }}
+      className="min-h-screen font-sans overflow-x-hidden selection:bg-[#00c875]/20 selection:text-[#00c875]"
+    >
+      {/* Background subtle glow */}
+      <div className="fixed inset-0 pointer-events-none">
+        <div className="absolute top-[-20%] left-1/2 -translate-x-1/2 w-[800px] h-[800px] bg-[#00c875]/5 rounded-full blur-[120px]" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[600px] h-[600px] bg-[#00c875]/[0.03] rounded-full blur-[100px]" />
+      </div>
 
-            {/* Slow-drifting grid — CSS animation, zero JS */}
-            <div className="absolute inset-0 opacity-[0.03] pointer-events-none
-                [background-image:linear-gradient(#39ff14_1px,transparent_1px),linear-gradient(90deg,#39ff14_1px,transparent_1px)]
-                [background-size:48px_48px]
-                animate-[gridDrift_8s_linear_infinite]" />
-
-            {/* Scanline sweep */}
-            <div className="absolute inset-x-0 top-0 h-[2px] pointer-events-none z-[1]
-                bg-[linear-gradient(to_bottom,transparent,rgba(57,255,20,0.06),transparent)]
-                animate-[scanline_6s_linear_infinite]" />
-
-            {/* ── KEYFRAMES via Tailwind arbitrary — injected once ── */}
-            <style>{`
-                @keyframes gridDrift  { to { background-position: 48px 48px; } }
-                @keyframes scanline   { from { transform: translateY(-100%); } to { transform: translateY(100vh); } }
-                @keyframes fadeUp     { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: translateY(0); } }
-                @keyframes typewriter { from { width: 0; } to { width: 100%; } }
-                @keyframes caretBlink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
-                @keyframes ctaPulse   { 0%,100% { box-shadow: 0 0 0 0 rgba(57,255,20,.35); } 60% { box-shadow: 0 0 0 12px rgba(57,255,20,0); } }
-                @keyframes cardIn     { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: translateY(0); } }
-                @keyframes lineDraw   { from { width: 0; } to { width: 40px; } }
-                @keyframes pip        { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
-                .animate-fadeUp       { animation: fadeUp .5s ease both; }
-                .animate-ctaPulse     { animation: ctaPulse 2.5s 1.2s ease infinite; }
-                .animate-cardIn       { animation: cardIn .5s ease both; opacity: 0; }
-                .card-underline::after{ content:''; display:block; height:1px; background:currentColor;
-                                        width:0; margin-top:4px; transition:width .3s ease; opacity:.4; }
-                .group:hover .card-underline::after { width: 100%; }
-            `}</style>
-
-            {/* ── NAVBAR ── */}
-            <header className="fixed top-0 left-0 w-full z-50 h-14 border-b border-white/5 bg-[#020503]/85
-                before:content-[''] before:absolute before:top-0 before:inset-x-0 before:h-px before:bg-[#39ff14] before:opacity-40
-                animate-fadeUp">
-                <div className="max-w-7xl mx-auto px-6 h-full flex items-center justify-between">
-                    <h2 className="text-base font-black text-white tracking-[0.18em] uppercase">
-                        LEVIYRA<span style={{ color: theme.primary }}>_OS</span>
-                    </h2>
-                    <Link to="/login">
-                        <button className="flex items-center gap-2 px-5 py-2 border border-[#39ff14]/30 text-[#39ff14]
-                            text-[10px] font-black uppercase tracking-[0.2em] bg-[#39ff14]/5
-                            hover:bg-[#39ff14]/12 hover:border-[#39ff14] transition-all duration-200">
-                            <Play size={12} className="fill-current" />
-                            ENGAGE
-                        </button>
-                    </Link>
-                </div>
-            </header>
-
-            {/* ── HERO ── */}
-            <main className="max-w-4xl mx-auto px-6 pt-32 pb-20 flex flex-col items-center text-center gap-7 relative z-10">
-
-                {/* Badge — fade up, delay 100ms */}
-                <div className="animate-fadeUp [animation-delay:100ms] opacity-0
-                    flex items-center gap-2.5 px-3.5 py-2 bg-[#020503]/70 border border-[#39ff14]/20">
-                    <span className="relative flex w-2 h-2">
-                        <span className="absolute inset-0 rounded-full bg-[#39ff14] opacity-50 animate-ping" />
-                        <span className="relative w-2 h-2 rounded-full bg-[#39ff14]" />
-                    </span>
-                    <span style={{ color: theme.primary }} className="text-[11px] font-black tracking-widest">340,000,000</span>
-                    <span className="text-zinc-500 text-[10px] font-bold tracking-widest uppercase">Real Interactions</span>
-                </div>
-
-                {/* Heading — fade up, delay 200ms */}
-                <h1 className="animate-fadeUp [animation-delay:200ms] opacity-0
-                    text-white font-black uppercase leading-[.92] tracking-tighter
-                    text-[clamp(40px,7.5vw,86px)] max-w-4xl">
-                    AI FORMS{' '}
-                    <span style={{ color: theme.primary }}>REALITY</span>.<br />
-                    YOU FORM THE STORY.
-                </h1>
-
-                {/* Typewriter status line — fade up delay 300ms, typewriter starts at 800ms */}
-                <div className="animate-fadeUp [animation-delay:300ms] opacity-0
-                    text-[#39ff14]/45 text-[11px] font-bold tracking-[.12em] uppercase
-                    overflow-hidden whitespace-nowrap">
-                    <span className="inline-block overflow-hidden whitespace-nowrap
-                        border-r-2 border-[#39ff14]
-                        [animation:typewriter_2.2s_.8s_steps(40)_forwards,caretBlink_.7s_3s_step-end_6]
-                        w-0 max-w-full">
-                        // NEURAL_LINK: ESTABLISHED · PROTOCOL: ACTIVE
-                    </span>
-                </div>
-
-                {/* Body — fade up delay 400ms */}
-                <p className="animate-fadeUp [animation-delay:400ms] opacity-0
-                    text-[15px] leading-relaxed font-light text-zinc-400 max-w-[540px]">
-                    Step into Leviyra_OS — the first endless AI RPG. A neural interface generates boundless
-                    narratives, complex characters, and living worlds that react dynamically to your every
-                    decision. No scripts. No limits.
-                </p>
-
-                {/* CTA — fade up delay 500ms, pulse loop after 1.2s */}
-                <div className="animate-fadeUp [animation-delay:500ms] opacity-0 flex flex-col items-center gap-3 mt-2">
-                    <Link to="/login" className="focus:outline-none">
-                        <button
-                            style={{ backgroundColor: theme.primary }}
-                            className="animate-ctaPulse group relative flex items-center gap-3
-                                px-10 py-4 text-[#020503] font-black text-[11px] uppercase tracking-[.25em]
-                                hover:brightness-105 transition-all duration-200"
-                        >
-                            {/* Corner brackets */}
-                            <span className="absolute top-0 left-0 w-2 h-2 border-t-2 border-l-2 border-[#020503]/50" />
-                            <span className="absolute bottom-0 right-0 w-2 h-2 border-b-2 border-r-2 border-[#020503]/50" />
-                            <Play size={14} className="fill-current" />
-                            BEGIN YOUR PROTOCOL
-                        </button>
-                    </Link>
-                    <span className="text-[9px] font-bold tracking-[.2em] uppercase text-zinc-700">
-                        Neural Link: ESTABLISHED
-                    </span>
-                </div>
-            </main>
-
-            {/* ── FEATURE CARDS ── */}
-            <section className="relative z-10 max-w-6xl mx-auto px-6 pb-20">
-
-                {/* Divider that draws in */}
-                <div className="h-px bg-[#39ff14]/25 mx-auto mb-14
-                    [animation:lineDraw_.7s_1.1s_ease_forwards] w-0" />
-
-                <div className="grid md:grid-cols-3 gap-5">
-                    {features.map((f, i) => (
-                        <div
-                            key={i}
-                            style={{ borderColor: 'transparent' }}
-                            className={`group relative flex flex-col gap-5 bg-[#050f08]/80 border p-7
-                                ${f.borderColor} ${f.delay}
-                                animate-cardIn
-                                hover:-translate-y-1 transition-all duration-250`}
-                        >
-                            {/* HUD corner bracket */}
-                            <span className={`absolute top-0 left-0 w-3 h-3 border-t border-l ${f.cornerColor}`} />
-
-                            <div style={{ color: f.color }}>
-                                <div className="p-2.5 border border-current w-fit bg-white/3">
-                                    {f.icon}
-                                </div>
-                            </div>
-
-                            <h3
-                                style={{ color: f.color }}
-                                className="card-underline text-[13px] font-black uppercase tracking-[.06em]"
-                            >
-                                {f.title}
-                            </h3>
-
-                            <p className="text-[13px] font-light leading-relaxed text-zinc-500 mt-auto">
-                                {f.description}
-                            </p>
-                        </div>
-                    ))}
-                </div>
-            </section>
-
-            {/* ── FOOTER STATUS ── */}
-            <div className="relative z-10 flex items-center justify-center gap-4 pb-8
-                animate-fadeUp [animation-delay:1050ms] opacity-0">
-                {['Neural_V.1.0.4', 'Server: PUBLIC', 'EXECUTE PROTOCOL'].map((s, i) => (
-                    <React.Fragment key={s}>
-                        <span className={`font-mono text-[9px] font-bold tracking-[.14em] uppercase
-                            ${i === 2 ? 'text-[#39ff14]/55' : 'text-zinc-700'}`}>
-                            {s}
-                        </span>
-                        {i < 2 && <span className="w-px h-3 bg-zinc-800 skew-x-[-20deg]" />}
-                    </React.Fragment>
-                ))}
+      {/* Navbar */}
+      <header className="fixed top-0 left-0 w-full z-50 h-16 border-b border-white/5 bg-[#0a0a0a]/80 backdrop-blur-xl">
+        <div className="max-w-6xl mx-auto px-6 h-full flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-[#00c875] flex items-center justify-center">
+              <span className="text-black font-black text-sm">L</span>
             </div>
+            <span className="text-lg font-bold tracking-tight">Leviyra</span>
+          </div>
 
-            {/* ── FOOTER ── */}
-            <footer className="border-t border-white/5 bg-[#020503] relative z-20">
-                <div className="max-w-7xl mx-auto px-6 py-7 flex flex-col md:flex-row items-center justify-between gap-4">
-                    <p style={{ color: theme.textMuted }} className="text-[9px] tracking-widest uppercase">
-                        © Leviyra_OS :: Neural Narrative Division. ALL RIGHTS RESERVED.
-                    </p>
-                    <div className="flex items-center gap-6 text-[9px] text-zinc-500 tracking-widest uppercase">
-                        <a href="/status" className="hover:text-[#39ff14] transition-colors">Network_Status</a>
-                        <a href="/terms" className="hover:text-[#22d3ee] transition-colors">Security_Terms</a>
-                    </div>
-                </div>
-            </footer>
+          <Link to="/login">
+            <button className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-[#00c875] text-black text-sm font-semibold hover:bg-[#00d27a] transition-all duration-200 shadow-lg shadow-[#00c875]/20">
+              <Play size={14} className="fill-current" />
+              Start Playing
+            </button>
+          </Link>
         </div>
-    );
+      </header>
+
+      {/* Hero */}
+      <main className="relative z-10 max-w-5xl mx-auto px-6 pt-32 pb-24 text-center">
+        {/* Badge */}
+        <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#00c875]/10 border border-[#00c875]/20 mb-8">
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#00c875] opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-[#00c875]"></span>
+          </span>
+          <span className="text-sm font-medium text-[#00c875]">
+            340M+ Interactions
+          </span>
+        </div>
+
+        {/* Main Heading */}
+        <h1 className="text-5xl sm:text-6xl md:text-7xl font-bold tracking-tight leading-[1.1] mb-6">
+          Your story. <span className="text-[#00c875]">Your rules.</span>
+          <br />
+          Infinite possibilities.
+        </h1>
+
+        {/* Subtitle */}
+        <p className="text-lg sm:text-xl text-zinc-400 max-w-2xl mx-auto mb-10 leading-relaxed">
+          Dive into living narratives where every choice matters. Talk to
+          unforgettable characters, shape worlds, and create stories that only
+          you can experience.
+        </p>
+
+        {/* CTA Buttons */}
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+          <Link to="/login">
+            <button className="flex items-center gap-2.5 px-8 py-4 rounded-full bg-[#00c875] text-black text-base font-semibold hover:bg-[#00d27a] transition-all duration-200 shadow-xl shadow-[#00c875]/25 hover:shadow-[#00c875]/40 hover:-translate-y-0.5">
+              <Play size={18} className="fill-current" />
+              Begin Your Adventure
+            </button>
+          </Link>
+          <Link to="/explore">
+            <button className="flex items-center gap-2 px-8 py-4 rounded-full border border-white/15 text-white text-base font-medium hover:bg-white/5 transition-all duration-200">
+              <Sparkles size={18} />
+              Explore Characters
+            </button>
+          </Link>
+        </div>
+      </main>
+
+      {/* Features */}
+      <section className="relative z-10 max-w-6xl mx-auto px-6 pb-28">
+        <div className="grid md:grid-cols-3 gap-6">
+          {features.map((feature, i) => (
+            <div
+              key={i}
+              className="group relative p-8 rounded-2xl bg-[#111] border border-white/5 hover:border-[#00c875]/30 transition-all duration-300 hover:-translate-y-1"
+            >
+              <div className="w-12 h-12 rounded-xl bg-[#00c875]/10 flex items-center justify-center text-[#00c875] mb-5 group-hover:bg-[#00c875]/15 transition-colors">
+                {feature.icon}
+              </div>
+              <h3 className="text-lg font-semibold mb-3">{feature.title}</h3>
+              <p className="text-zinc-400 text-[15px] leading-relaxed">
+                {feature.description}
+              </p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Bottom CTA */}
+      <section className="relative z-10 max-w-4xl mx-auto px-6 pb-24 text-center">
+        <div className="rounded-3xl bg-gradient-to-b from-[#111] to-[#0a0a0a] border border-white/5 p-12 sm:p-16">
+          <h2 className="text-3xl sm:text-4xl font-bold mb-4">
+            Ready to write your legend?
+          </h2>
+          <p className="text-zinc-400 text-lg mb-8 max-w-xl mx-auto">
+            Join thousands of players already living infinite stories.
+          </p>
+          <Link to="/login">
+            <button className="inline-flex items-center gap-2.5 px-8 py-4 rounded-full bg-[#00c875] text-black text-base font-semibold hover:bg-[#00d27a] transition-all duration-200 shadow-xl shadow-[#00c875]/20">
+              <Play size={18} className="fill-current" />
+              Start Playing Free
+            </button>
+          </Link>
+        </div>
+      </section>
+
+      {/* Footer */}
+      <footer className="border-t border-white/5 relative z-10">
+        <div className="max-w-6xl mx-auto px-6 py-8 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 rounded-md bg-[#00c875] flex items-center justify-center">
+              <span className="text-black font-bold text-xs">L</span>
+            </div>
+            <span className="text-sm font-medium text-zinc-400">Leviyra</span>
+          </div>
+          <p className="text-sm text-zinc-500">
+            © {new Date().getFullYear()} Leviyra. All rights reserved.
+          </p>
+        </div>
+      </footer>
+    </div>
+  );
 }

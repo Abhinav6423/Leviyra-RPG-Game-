@@ -4,7 +4,13 @@ import Character from "../modals/Character.modal.js";
 import Chat from "../modals/Chat.modal.js";
 import Message from "../modals/message.modal.js";
 import User from "../modals/User.modal.js";
-import { generateSystemPrompt, CHECKPOINT_PROMPT } from "../utils/prompt.js";
+import {
+  MOODS,
+  fillPlaceholders,
+  generateSystemPrompt,
+  buildCheckpointPrompt,
+  MERGE_PROMPT,
+} from "../utils/prompt.js";
 import { hasActivePaidPlan } from "../utils/hasActivePaidPlan.js";
 import {
   getVersions,
@@ -15,15 +21,16 @@ import {
 } from "../utils/message.helpers.js";
 
 /* ============================================================
-   CONFIG — only numbers/settings you'll ever need to tune live
-   here. Everything else in the file reads from these constants,
-   so you never have to hunt through the code to change a value.
+   CONFIG — everything you'll ever tune lives here.
+   (Usage limits live in utils/usage.js.)
 ============================================================ */
-const MODEL = "gemma-4-uncensored"; // which AI model to call
-const WINDOW_SIZE = 40; // how many past messages we send as context
-const CHECKPOINT_EVERY = 30; // make a new memory-summary every N user messages
-const LOCK_MS = 60_000; // how long a user's "lock" lasts (stops double-sends)
-const AI_TIMEOUT_MS = 45_000; // give up waiting on the AI after this long
+const MODEL = "gemma-4-uncensored";
+const WINDOW_SIZE = 40; // past messages sent as context (~20 user turns)
+const CHECKPOINT_EVERY = 15; // new memory summary every N user turns (keep <= WINDOW_SIZE / 2)
+const MAX_CHECKPOINTS = 6; // above this, the 3 oldest are merged into one
+const LOCK_MS = 150_000; // per-user lock lifetime (must be > AI_TIMEOUT_MS)
+const AI_TIMEOUT_MS = 90_000; // max time for one whole generation (incl. streaming)
+const PRONOUNS = ["He/Him", "She/Her", "They/Them"]; // must match Chat schema enum
 
 const GEN_PARAMS = {
   temperature: 0.88,
@@ -33,72 +40,26 @@ const GEN_PARAMS = {
   repetition_penalty: 1.05,
 };
 
-// Tells the AI: "reply with this exact JSON shape"
-// { content: "story text", mood: "one of these colors" }
-const MOOD_SCHEMA = {
-  type: "json_schema",
-  json_schema: {
-    name: "reply_with_mood",
-    strict: true,
-    schema: {
-      type: "object",
-      properties: {
-        content: { type: "string" },
-        mood: {
-          type: "string",
-          enum: [
-            "Red",
-            "Orange",
-            "Yellow",
-            "Violet",
-            "Blue",
-            "Pink",
-            "HotPink",
-          ],
-        },
-      },
-      required: ["content", "mood"],
-      additionalProperties: false,
-    },
-  },
-};
-
-// OpenAI-compatible client, but it's actually pointed at Venice AI
 const client = new OpenAI({
   apiKey: process.env.ARLIAI_API_KEY,
   baseURL: "https://api.venice.ai/api/v1",
 });
 
 /* ============================================================
-   GLOBAL QUEUE + LOCKS
-   ------------------------------------------------------------
-   - aiQueue: only 2 AI requests run at the same time, server-wide.
-   - userLocks: stops ONE user from sending 2 messages at once
-     (e.g. double-clicking send).
-   Both are stored on `global` so hot-reloads / restarts in dev
-   don't create duplicate queues.
+   QUEUE + LOCKS (stored on `global` so dev hot-reloads don't duplicate)
 ============================================================ */
-const aiQueue =
-  global.aiQueue ||
-  new PQueue({ concurrency: 2, timeout: 60_000, throwOnTimeout: true });
+const aiQueue = global.aiQueue || new PQueue({ concurrency: 2 });
 if (!global.aiQueue) global.aiQueue = aiQueue;
 
 const userLocks = global.userLocks || new Map();
 if (!global.userLocks) global.userLocks = userLocks;
 
-// Every 3 minutes, clear out any locks that are older than LOCK_MS
-// (protects against a memory leak if a lock never got released)
 setInterval(() => {
   const now = Date.now();
-  for (const [id, ts] of userLocks) {
+  for (const [id, ts] of userLocks)
     if (now - ts > LOCK_MS) userLocks.delete(id);
-  }
-}, 180_000);
+}, 180_000).unref();
 
-/**
- * Try to lock a user. Returns false if they already have an
- * active lock (i.e. "please wait, your last message is still processing").
- */
 const tryLock = (userId) => {
   const ts = userLocks.get(userId);
   if (ts && Date.now() - ts < LOCK_MS) return false;
@@ -108,1255 +69,1088 @@ const tryLock = (userId) => {
 const unlock = (userId) => userLocks.delete(userId);
 
 /* ============================================================
-   OPENING LINE RESOLVER
-   ------------------------------------------------------------
-   Figures out what the character's very first message should be
-   when a brand-new chat is auto-created (e.g. user messages a
-   character directly without going through the Preloader screen
-   first). Priority order:
-
-     1. User's own custom opening line (saved on chat.preloader.firstMessage
-        by selectInitialMessage, or passed inline in the sendMessage body)
-     2. Character's first preset dialogue (char.firstDialogues[0])
-     3. Hard fallback string, so we never save `undefined` to the DB
-
-   NOTE: the schema field is `firstDialogues` (Character.modal.js).
-   There is NO `startingMessage` field on the Character model — using
-   that name here was the bug that caused new chats to open with
-   "*Silence.*" instead of the character's real greeting or the
-   user's custom one.
+   SMALL HELPERS
 ============================================================ */
-const resolveOpeningLine = (char, activeChat) =>
-  activeChat?.preloader?.firstMessage?.trim() ||
-  char?.firstDialogues?.[0]?.trim() ||
-  "*Silence.*";
+
+// Throw an error WE want the client to see: fail(404, "Not found").
+// `expose` separates our errors from provider/SDK errors (which also have .status).
+const fail = (status, message) => {
+  throw Object.assign(new Error(message), { status, expose: true });
+};
+
+const sendError = (res, err) => {
+  if (res.headersSent) return;
+  if (err.name === "CastError")
+    return res.status(400).json({ error: "Invalid ID." });
+  if (err.expose) return res.status(err.status).json({ error: err.message });
+  console.error(err);
+  return res
+    .status(500)
+    .json({ error: "Something went wrong. Please try again." });
+};
+
+// Wrapper for normal (non-AI) routes: catches errors so each handler stays clean.
+const route = (fn) => async (req, res) => {
+  try {
+    await fn(req, res);
+  } catch (err) {
+    sendError(res, err);
+  }
+};
+
+// Wrapper for AI routes: one lock per user, always released, errors handled
+// differently before/after the stream has started.
+const withLock = async (req, res, fn) => {
+  const userId = String(req.user._id);
+  if (!tryLock(userId))
+    return res
+      .status(429)
+      .json({ error: "Wait for the previous response to complete." });
+
+  const state = { streaming: false, finished: false };
+  try {
+    await fn(state);
+  } catch (err) {
+    console.error(`${req.method} ${req.originalUrl} failed:`, err.message);
+    if (state.streaming) {
+      if (!state.finished) emergencyClose(res);
+    } else if (!res.headersSent) {
+      if (err.expose || err.name === "CastError") sendError(res, err);
+      else
+        res
+          .status(500)
+          .json({ error: "AI pipeline failure. Please try again." });
+    }
+  } finally {
+    unlock(userId);
+  }
+};
+
+// Run something after the response is sent; never crash the server.
+const background = (label, fn) =>
+  fn().catch((err) => console.error(`${label} failed:`, err.message));
+
+const asText = (v) => (typeof v === "string" ? v.trim() : "");
+
+const accountName = (user) => user?.name || user?.username || "User";
+
+// How a user message (with optional dice roll) is sent to the model.
+const userPayload = (content, diceRoll) => ({
+  role: "user",
+  content: diceRoll ? `Roll: ${diceRoll}\n${content}` : content,
+});
+
+// Chat schema requires displayName, pronouns and firstMessage — always build a valid one.
+const buildPreloader = (input, char, user) => {
+  const displayName =
+    asText(input?.displayName).slice(0, 50) || accountName(user);
+  const pronouns = PRONOUNS.includes(input?.pronouns)
+    ? input.pronouns
+    : "They/Them";
+  const firstMessage =
+    asText(input?.firstMessage) ||
+    asText(char?.firstDialogues?.[0]) ||
+    "*Silence.*";
+  return {
+    displayName,
+    pronouns,
+    firstMessage: fillPlaceholders(firstMessage, {
+      userName: displayName,
+      charName: char.name,
+    }),
+  };
+};
+
+const sortedCheckpoints = (chat) =>
+  [...(chat?.checkpoints || [])].sort(
+    (a, b) => a.atUserMessageCount - b.atUserMessageCount,
+  );
+
+// Chat as it WILL look after deleting later messages: only checkpoints that
+// describe events that still exist. Used when generating BEFORE deleting.
+const chatAsOf = (chat, userMessageCount) => ({
+  ...chat,
+  checkpoints: (chat.checkpoints || []).filter(
+    (c) => c.atUserMessageCount < userMessageCount,
+  ),
+});
+
+// Last WINDOW_SIZE messages, oldest first.
+// excludeId: skip one message. before: only messages older than this date.
+const recentMessages = async (
+  chatId,
+  { excludeId = null, before = null } = {},
+) => {
+  const filter = { chatId };
+  if (excludeId) filter._id = { $ne: excludeId };
+  if (before) filter.createdAt = { $lt: before };
+  const docs = await Message.find(filter)
+    .sort({ createdAt: -1 })
+    .limit(WINDOW_SIZE)
+    .lean();
+  return docs.reverse();
+};
+
+// Find a message AND make sure it belongs to the logged-in user.
+const getOwnedMessage = async (messageId, userId) => {
+  const msg = await Message.findById(messageId);
+  if (!msg) fail(404, "Message not found.");
+  const chat = await Chat.findOne({ _id: msg.chatId, userId }).lean();
+  if (!chat) fail(404, "Message not found."); // same error on purpose: don't reveal it exists
+  return { msg, chat };
+};
+
+// After deleting/editing messages: recount everything from the DB and drop
+// checkpoints that describe events that no longer exist.
+const resyncChat = async (chatId) => {
+  const [messageCount, userMessageCount, last] = await Promise.all([
+    Message.countDocuments({ chatId }),
+    Message.countDocuments({ chatId, role: "user" }),
+    Message.findOne({ chatId }).sort({ createdAt: -1 }).lean(),
+  ]);
+
+  const set = { messageCount, userMessageCount };
+  if (last) {
+    set.lastMessage = { text: getActiveContent(last), role: last.role };
+    set.lastMessageAt = last.createdAt;
+  }
+
+  const chat = await Chat.findByIdAndUpdate(
+    chatId,
+    {
+      $set: set,
+      $pull: {
+        checkpoints: { atUserMessageCount: { $gte: userMessageCount } },
+      },
+    },
+    { returnDocument: "after" },
+  ).lean();
+  if (!chat) fail(404, "Chat not found.");
+  return chat;
+};
+
+// Save a new assistant message + update the chat summary fields.
+const saveAssistantReply = async (chatId, text, mood, extra = {}) => {
+  await Message.create({
+    chatId,
+    role: "assistant",
+    content: [text],
+    ...extra,
+  });
+  await Chat.updateOne(
+    { _id: chatId },
+    {
+      $set: {
+        lastMessage: { text, role: "assistant" },
+        lastMessageAt: new Date(),
+        "worldState.currentMood": mood,
+      },
+      $inc: { messageCount: 1 },
+    },
+  );
+};
 
 /* ============================================================
-   CHECKPOINTS
-   ------------------------------------------------------------
-   A "checkpoint" is a short AI-written summary of what's
-   happened in the story so far. We inject these into every
-   future AI call (as fake "assistant" messages) so the AI
-   remembers events that are too old to fit in the normal
-   context window.
+   CHECKPOINTS (long-term memory)
 ============================================================ */
+const checkpointing = new Set(); // chat ids currently being summarized
 
-// Turns saved checkpoints into fake assistant messages, oldest first,
-// so the AI reads them in the order the story actually happened.
-const checkpointMessages = (chat) =>
-  (chat?.checkpoints || [])
-    .slice()
-    .sort((a, b) => a.atUserMessageCount - b.atUserMessageCount)
-    .map((c) => ({
-      role: "assistant",
-      content: `SYSTEM CHECKPOINT: ${c.text}`,
-    }));
+const summarize = async (system, userText) => {
+  const completion = await client.chat.completions.create({
+    model: MODEL,
+    temperature: 0.3,
+    max_tokens: 700,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: userText },
+    ],
+  });
+  return truncateSafely(
+    completion.choices[0]?.message?.content?.trim() || "",
+    3000,
+  );
+};
 
-// Runs in the background after a reply is sent — does NOT block
-// the user from seeing their response. Only fires every
-// CHECKPOINT_EVERY user messages.
-const maybeCreateCheckpoint = async (chat, char) => {
-  if (
-    chat.userMessageCount === 0 ||
-    chat.userMessageCount % CHECKPOINT_EVERY !== 0
-  )
-    return;
+// If there are too many checkpoints, merge the 3 oldest into one.
+const compactCheckpoints = async (chatId) => {
+  const chat = await Chat.findById(chatId).lean();
+  const cps = sortedCheckpoints(chat);
+  if (cps.length <= MAX_CHECKPOINTS) return;
+
+  const oldest = cps.slice(0, 3);
+  const merged = await summarize(
+    MERGE_PROMPT,
+    oldest.map((c) => c.text).join("\n\n---\n\n"),
+  );
+  if (!merged) return;
+
+  // Mongo can't $pull and $push the same field in one update, so two steps.
+  await Chat.updateOne(
+    { _id: chatId },
+    { $pull: { checkpoints: { _id: { $in: oldest.map((c) => c._id) } } } },
+  );
+  await Chat.updateOne(
+    { _id: chatId },
+    {
+      $push: {
+        checkpoints: {
+          text: merged,
+          atUserMessageCount: oldest[2].atUserMessageCount,
+        },
+      },
+    },
+  );
+};
+
+const maybeCreateCheckpoint = async (chatId, char) => {
+  const key = String(chatId);
+  if (checkpointing.has(key)) return; // already running for this chat
+  checkpointing.add(key);
 
   try {
-    const recent = await Message.find({ chatId: chat._id })
+    const chat = await Chat.findById(chatId).lean();
+    if (!chat) return;
+
+    const cps = sortedCheckpoints(chat);
+    const lastAt = cps.length ? cps[cps.length - 1].atUserMessageCount : 0;
+    const newTurns = chat.userMessageCount - lastAt;
+    if (newTurns < CHECKPOINT_EVERY) return;
+
+    const recent = await Message.find({ chatId })
       .sort({ createdAt: -1 })
-      .limit(CHECKPOINT_EVERY * 2)
+      .limit(Math.min(newTurns * 2 + 2, 200))
       .lean();
 
-    const checkpointPrompt = {
-      role: "system",
-      content: `${CHECKPOINT_PROMPT}\n\nPERSONALITY: ${char.personality}\nSCENARIO: ${char.scenario}\n\n[SYSTEM CHECKPOINTS]\n${(
-        chat.checkpoints || []
-      )
-        .map((c) => c.text)
-        .join("\n---\n")}`,
-    };
+    const userName = chat.preloader?.displayName || "User";
+    const transcript = toPayloadMessages(recent.reverse())
+      .map((m) => `${m.role === "user" ? userName : char.name}: ${m.content}`)
+      .join("\n\n");
 
-    const completion = await client.chat.completions.create({
-      model: MODEL,
-      messages: [checkpointPrompt, ...toPayloadMessages(recent.reverse())],
-      max_tokens: 500,
-    });
-
-    const text = truncateSafely(
-      completion.choices[0]?.message?.content?.trim() || "",
-      3000,
+    const text = await summarize(
+      buildCheckpointPrompt(char, cps, userName),
+      `Messages to summarize:\n\n${transcript}`,
     );
     if (!text) return;
 
+    // Only save if the chat didn't change (edit/delete) while we were summarizing.
     await Chat.updateOne(
-      { _id: chat._id },
+      { _id: chatId, userMessageCount: chat.userMessageCount },
       {
         $push: {
           checkpoints: { text, atUserMessageCount: chat.userMessageCount },
         },
       },
     );
-  } catch (err) {
-    console.error("Checkpoint generation failed:", err.message);
+    await compactCheckpoints(chatId);
+  } finally {
+    checkpointing.delete(key);
   }
 };
 
 /* ============================================================
-   STREAMING HELPERS
-   ------------------------------------------------------------
-   The AI always replies with one JSON blob:
-       {"content": "story text...", "mood": "Pink"}
-
-   But we want to show the user the story text AS IT'S BEING
-   TYPED, not wait for the whole JSON blob to finish. So this
-   streamer reads the raw tokens character-by-character, finds
-   the "content" field, and streams ONLY that part to the user —
-   the JSON wrapper itself (mood, etc.) is never shown, and never
-   leaks into the visible text.
+   STREAMING
+   The model's reply looks like:
+       [mood: Pink]
+       *story text...*
+   The streamer swallows the first line (mood) and streams the rest.
+   If the model forgets the tag, `defaultMood` (the previous mood) is used.
 ============================================================ */
+const createStreamer = (onText, defaultMood = "Blue") => {
+  let head = ""; // buffer while we look for the [mood: X] line
+  let headDone = false;
+  let started = false;
+  let mood = defaultMood;
+  let content = "";
 
-function createContentStreamer() {
-  let raw = ""; // everything received from the AI so far (used to extract "mood" later)
-  let started = false; // have we found the start of the "content" field yet?
-  let done = false; // have we hit the closing quote of "content" yet?
+  const emit = (t) => {
+    if (!started) {
+      t = t.trimStart(); // no leading blank lines
+      if (!t) return;
+      started = true;
+    }
+    if (!t) return;
+    content += t;
+    onText(t);
+  };
 
   return {
-    // Feed in one chunk of streamed text, get back only the
-    // clean story text that's ready to show the user.
     push(chunk) {
-      raw += chunk;
-      if (done) return "";
+      if (headDone) return emit(chunk);
 
-      if (!started) {
-        const match = raw.match(/"content"\s*:\s*"/);
-        if (!match) return ""; // "content" field hasn't started yet
-        started = true;
-        const matchIndex = raw.indexOf(match[0]);
-        raw = raw.slice(matchIndex + match[0].length);
+      head += chunk;
+      const m = head.match(/^\s*\[mood:\s*(\w+)\s*\]\s*/i);
+      if (m) {
+        mood =
+          MOODS.find((x) => x.toLowerCase() === m[1].toLowerCase()) || mood;
+        headDone = true;
+        return emit(head.slice(m[0].length));
       }
 
-      let out = "";
-      let i = 0;
-      while (i < raw.length) {
-        const ch = raw[i];
-
-        if (ch === "\\") {
-          // Escape sequences can be split across two different
-          // stream chunks (e.g. chunk A ends in "\" and chunk B
-          // starts with "r"). If the backslash is the very last
-          // character we've received so far, we don't yet know
-          // what it's escaping — stop processing this chunk and
-          // leave the lone "\" in `raw` so the next push() call
-          // can resolve it correctly. Without this, a dangling
-          // "\" falls through to the default branch below and
-          // gets flushed as a literal backslash, and the escaped
-          // char that follows (e.g. "r") gets flushed right after
-          // it as plain text — which is what was producing the
-          // literal "\r" showing up in the UI.
-          if (i + 1 >= raw.length) break;
-
-          const next = raw[i + 1];
-          // NOTE: \r is mapped to \n (not dropped) — otherwise a
-          // JSON "\r" escape would leave a stray literal "r"
-          // character in the visible text.
-          out +=
-            next === "n"
-              ? "\n"
-              : next === "t"
-                ? "\t"
-                : next === "r"
-                  ? "\n"
-                  : next;
-          i += 2;
-          continue;
-        }
-
-        if (ch === '"') {
-          done = true; // reached the closing quote of "content"
-          i++;
-          break;
-        }
-
-        out += ch;
-        i++;
+      // Keep waiting only while the buffer could still turn into "[mood: ...]"
+      const t = head.trimStart().toLowerCase();
+      const couldBeTag = t.length < 30 && "[mood:".startsWith(t.slice(0, 6));
+      if (!couldBeTag) {
+        headDone = true; // model skipped the tag — just show everything
+        emit(head);
       }
-
-      raw = raw.slice(i);
-      return out;
     },
-
-    // Once streaming is done, pull the "mood" value out of the
-    // full raw JSON we accumulated.
-    mood(fullRaw) {
-      const match = fullRaw.match(/"mood"\s*:\s*"(\w+)"/);
-      return match ? match[1] : "Blue";
+    finish() {
+      if (!headDone) {
+        headDone = true;
+        emit(head);
+      }
+      return { content: content.trim(), mood };
     },
   };
-}
+};
 
-// Sets the headers needed to start a Server-Sent-Events (SSE) stream
+// If the reply hit the token limit mid-sentence, cut back to the last full sentence.
+const trimToSentence = (text) => {
+  const end = Math.max(
+    text.lastIndexOf("."),
+    text.lastIndexOf("!"),
+    text.lastIndexOf("?"),
+    text.lastIndexOf("…"),
+    text.lastIndexOf('"'),
+    text.lastIndexOf("*"),
+  );
+  let out = end > text.length * 0.5 ? text.slice(0, end + 1) : text;
+  if ((out.match(/\*/g) || []).length % 2 === 1) out += "*"; // close an open action
+  return out;
+};
+
+// Two messages in a row with the same role -> merge into one.
+const mergeSameRole = (msgs) =>
+  msgs.reduce((acc, m) => {
+    const last = acc[acc.length - 1];
+    if (
+      last &&
+      last.role === m.role &&
+      typeof last.content === "string" &&
+      typeof m.content === "string"
+    ) {
+      last.content += "\n\n" + m.content;
+    } else {
+      acc.push({ ...m });
+    }
+    return acc;
+  }, []);
+
+const sse = (res, data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+
 const startSSE = (res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
+  res.flushHeaders?.();
 };
 
-// Actually calls the AI. Races the real response against a timeout —
-// whichever finishes first wins. If the timeout wins, we throw.
-const runGeneration = (
-  systemPrompt,
-  history,
-  priority,
-  maxTokens = GEN_PARAMS.max_tokens,
-) =>
-  Promise.race([
-    aiQueue.add(
-      () =>
-        client.chat.completions.create({
-          model: MODEL,
-          messages: [systemPrompt, ...history],
-          temperature: GEN_PARAMS.temperature,
-          top_p: GEN_PARAMS.top_p,
-          max_tokens: maxTokens,
-          response_format: MOOD_SCHEMA,
-          stream: true,
-        }),
-      { priority }, // paid users get priority (processed sooner in the queue)
-    ),
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("AI Timeout")), AI_TIMEOUT_MS),
-    ),
-  ]);
-
-/**
- * Streams the AI's reply to the client as it arrives.
- * IMPORTANT: this does NOT close the connection or send "[DONE]".
- * That happens later in `finishStream`, AFTER we've saved to the DB —
- * this ordering matters, see the comment above `finishStream`.
- */
-const streamToClient = async (res, stream) => {
-  const streamer = createContentStreamer();
-  let raw = ""; // full raw JSON (needed to extract mood at the end)
-  let content = ""; // clean story text only (what the user actually sees)
-
-  for await (const chunk of stream) {
-    const text = chunk.choices[0]?.delta?.content || "";
-    if (!text) continue;
-    raw += text;
-    const out = streamer.push(text);
-    if (out) {
-      content += out;
-      res.write(`data: ${JSON.stringify({ text: out })}\n\n`);
-    }
-  }
-
-  const mood = streamer.mood(raw);
-  return { content: content.trim(), mood };
-};
-
-/**
- * Sends the final "mood" event + "[DONE]" and closes the connection.
- *
- * ⚠️ ALWAYS call this AFTER the DB save is finished, never before.
- * If we told the client "done" before saving, the frontend's
- * reload() could fire and fetch OLD data — a race condition.
- */
-const finishStream = (res, mood) => {
-  res.write(`data: ${JSON.stringify({ mood })}\n\n`);
+// Call ONLY after the DB save is done (otherwise the frontend can reload old data).
+const finishStream = (res, state, mood) => {
+  sse(res, { mood });
   res.write("data: [DONE]\n\n");
   res.end();
+  state.finished = true;
 };
 
-// If something breaks mid-stream, tell the user gracefully instead
-// of just hanging or crashing.
+// Stream already started and then something failed: tell the frontend it FAILED
+// (as an `error` event, not as fake AI text). Nothing was saved to the DB.
 const emergencyClose = (res) => {
   try {
-    res.write(
-      `data: ${JSON.stringify({ text: "\n*(The telepathic link severed unexpectedly...)*" })}\n\n`,
-    );
+    sse(res, { error: "Generation failed. Please try again." });
     res.write("data: [DONE]\n\n");
     res.end();
   } catch (_) {}
 };
 
+// The whole generation (connect + stream) runs INSIDE the queue slot,
+// so "concurrency: 2" really means 2 live generations.
+// `onStart` is called right before the first text is sent (opens the SSE lazily).
+const generate = (
+  res,
+  system,
+  messages,
+  priority,
+  maxTokens,
+  defaultMood,
+  onStart,
+) =>
+  aiQueue.add(
+    async () => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), AI_TIMEOUT_MS);
+      try {
+        const stream = await client.chat.completions.create(
+          {
+            model: MODEL,
+            messages: [system, ...messages],
+            ...GEN_PARAMS,
+            max_tokens: maxTokens,
+            stream: true,
+          },
+          { signal: ctrl.signal },
+        );
+
+        const streamer = createStreamer((text) => {
+          onStart();
+          sse(res, { text });
+        }, defaultMood);
+        let finishReason = null;
+
+        for await (const chunk of stream) {
+          const choice = chunk.choices?.[0];
+          if (choice?.finish_reason) finishReason = choice.finish_reason;
+          if (choice?.delta?.content) streamer.push(choice.delta.content);
+        }
+
+        const out = streamer.finish();
+        if (finishReason === "length")
+          out.content = trimToSentence(out.content);
+        return out;
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    { priority },
+  );
+
+/**
+ * The ONE place where a prompt is built and a reply is generated.
+ * Every route uses it, so the user's name, checkpoints, etc. are always the same.
+ * SSE opens only when the first token arrives, so failures BEFORE that
+ * (provider down, empty reply) return a normal JSON error with a real status code.
+ */
+const generateReply = async ({
+  req,
+  res,
+  state,
+  char,
+  chat,
+  history,
+  extra = [],
+  diceRoll = null,
+  maxTokens = GEN_PARAMS.max_tokens,
+}) => {
+  const system = generateSystemPrompt({
+    char,
+    userName: chat.preloader?.displayName || accountName(req.user),
+    pronouns: chat.preloader?.pronouns,
+    diceRoll,
+    checkpoints: sortedCheckpoints(chat),
+  });
+  const messages = mergeSameRole([...toPayloadMessages(history), ...extra]);
+  const priority = hasActivePaidPlan(req.user.subscription, req.user.usage)
+    ? 10
+    : 1;
+
+  let opened = false;
+  const open = () => {
+    if (opened) return;
+    opened = true;
+    startSSE(res);
+    state.streaming = true;
+  };
+
+  const out = await generate(
+    res,
+    system,
+    messages,
+    priority,
+    maxTokens,
+    chat.worldState?.currentMood || "Blue",
+    open,
+  );
+
+  // Don't save a fake reply — treat it as a failure.
+  if (!out.content)
+    fail(502, "The AI returned an empty response. Please try again.");
+
+  open(); // safety: make sure SSE is open before finishStream
+  return out;
+};
+
 /* ============================================================
-   USAGE TRACKING
-   ------------------------------------------------------------
-   - Free plan: original daily/total counters (usage.totalMessages,
-     usage.messagesToday, usage.messagesResetAt) — untouched logic.
-   - Weekly plan: SEPARATE counter (usage.weeklyMessagesUsed), capped
-     at WEEKLY_MESSAGE_LIMIT messages per billing cycle — NOT a 7-day
-     time window. Never reads/writes the free-tier fields, so the two
-     never mix even if a user switches plans.
-   - Monthly plan: fully unlimited — nothing to track, we return early
-     without touching the DB at all.
-
-   Cycle-reset detection: usage.weeklyUsageCycleEnd stores a snapshot
-   of subscription.currentPeriodEnd. When the live currentPeriodEnd no
-   longer matches the stored snapshot, that means the subscription
-   renewed (new week started) — the counter resets to 1 automatically,
-   no cron job needed.
+   USAGE TRACKING (counted ONLY after a successful generation;
+   the limit middleware only checks, it never counts)
+   - Monthly plan: unlimited, sirf analytics.
+   - Pack plan: packMessagesLeft -1 har message par; 0 hote hi plan free.
+   - Free plan: daily counter + lifetime counter.
 ============================================================ */
-const getTodayDateString = () => new Date().toISOString().split("T")[0];
-
-const FREE_DAILY_LIMIT = 5; // keep in sync with frontend
-
-// Weekly plan cap — keep in sync with WEEKLY_MESSAGE_LIMIT in
-// checkMessageLimit.middleware.js.
-const WEEKLY_MESSAGE_LIMIT = 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 const updateUserUsage = async (userId) => {
   const user = await User.findById(userId).select("usage subscription");
   if (!user) return;
 
   const sub = user.subscription;
-  const isPaid = hasActivePaidPlan(sub);
-
-  // Monthly = fully unlimited, no counter to maintain at all.
-  if (isPaid && sub.plan === "monthly") return;
-
-  // Weekly = separate counter, capped, tied to the current billing cycle.
-  if (isPaid && sub.plan === "weekly") {
-    const currentPeriodEnd = sub.currentPeriodEnd
-      ? new Date(sub.currentPeriodEnd).getTime()
-      : null;
-    const storedCycleEnd = user.usage?.weeklyUsageCycleEnd
-      ? new Date(user.usage.weeklyUsageCycleEnd).getTime()
-      : null;
-
-    // The stored cycle marker doesn't match the live subscription period
-    // -> the plan just renewed (new week started). Reset the counter
-    // instead of letting it carry over from the previous cycle.
-    if (currentPeriodEnd && currentPeriodEnd !== storedCycleEnd) {
-      await User.findByIdAndUpdate(userId, {
-        $set: {
-          "usage.weeklyMessagesUsed": 1,
-          "usage.weeklyUsageCycleEnd": sub.currentPeriodEnd,
-        },
-      });
-      return;
-    }
-
-    await User.findByIdAndUpdate(userId, {
-      $inc: { "usage.weeklyMessagesUsed": 1 },
-    });
-    return;
-  }
-
-  // Free plan (or an expired/cancelled paid plan) -> original free-tier logic.
+  const isPaid = hasActivePaidPlan(sub, user.usage);
   const now = new Date();
-  const resetAt = user.usage?.messagesResetAt;
-  const cycleExpired = resetAt && now >= new Date(resetAt);
 
-  // Previous 24h cycle (started when the limit was hit) has expired —
-  // wipe today's counter and clear the reset timestamp.
-  if (cycleExpired) {
-    await User.findByIdAndUpdate(userId, {
-      $set: { "usage.messagesToday": 1, "usage.messagesResetAt": null },
-      $inc: { "usage.totalMessages": 1 },
-    });
+  const inc = { "usage.lifetimeMessages": 1 };
+  const set = { "usage.lastMessageAt": now };
+
+  // ---------- MONTHLY: unlimited, sirf analytics ----------
+  if (isPaid && sub.plan === "monthly") {
+    await User.updateOne({ _id: userId }, { $inc: inc, $set: set });
     return;
   }
 
-  const currentToday = user.usage?.messagesToday || 0;
-  const newToday = currentToday + 1;
+  // ---------- PACK: atomic decrement ----------
+  if (isPaid && sub.plan === "pack") {
+    const updated = await User.findOneAndUpdate(
+      {
+        _id: userId,
+        "subscription.plan": "pack",
+        "usage.packMessagesLeft": { $gt: 0 },
+      },
+      {
+        $inc: { ...inc, "usage.packMessagesLeft": -1 },
+        $set: set,
+      },
+      { returnDocument: "after" },
+    ).select("usage");
 
-  const updateQuery = {
-    $inc: { "usage.totalMessages": 1, "usage.messagesToday": 1 },
-  };
-
-  // This message just pushed them to the limit — start the 24h countdown
-  // from THIS moment, but only if a cycle isn't already running.
-  if (newToday === FREE_DAILY_LIMIT && !resetAt) {
-    updateQuery.$set = {
-      "usage.messagesResetAt": new Date(now.getTime() + 24 * 60 * 60 * 1000),
-    };
+    // Last message use ho gaya -> base (free) plan par wapas
+    if (updated && updated.usage.packMessagesLeft <= 0) {
+      await User.updateOne(
+        { _id: userId, "subscription.plan": "pack" },
+        {
+          $set: {
+            "subscription.plan": "free",
+            "subscription.status": "expired",
+          },
+        },
+      );
+    }
+    return;
   }
 
-  await User.findByIdAndUpdate(userId, updateQuery);
+  // ---------- FREE (ya expired paid): 24h window ----------
+  const resetAt = user.usage?.messagesResetAt
+    ? new Date(user.usage.messagesResetAt)
+    : null;
+  inc["usage.totalMessages"] = 1;
+
+  if (resetAt && now >= resetAt) {
+    // Purana window khatam -> naya window, count 1 se
+    set["usage.messagesToday"] = 1;
+    set["usage.messagesResetAt"] = new Date(now.getTime() + DAY_MS);
+  } else {
+    inc["usage.messagesToday"] = 1;
+    if (!resetAt)
+      set["usage.messagesResetAt"] = new Date(now.getTime() + DAY_MS);
+  }
+
+  await User.updateOne({ _id: userId }, { $inc: inc, $set: set });
 };
+
+// Awaited BEFORE finishStream so the frontend's next usage fetch is accurate.
+// A usage failure must never break an otherwise successful reply.
+const trackUsage = (userId) =>
+  updateUserUsage(userId).catch((err) =>
+    console.error("updateUserUsage failed:", err.message),
+  );
 
 /* ============================================================
    1. SEND MESSAGE
+   User + AI message are saved TOGETHER, only after the AI succeeded.
+   If generation fails, nothing is saved and the client gets an error.
 ============================================================ */
-export const sendMessage = async (req, res) => {
-  const userId = String(req.user._id);
-  const { characterId } = req.params;
-  const content = (req.body.content || "").trim();
+export const sendMessage = (req, res) =>
+  withLock(req, res, async (state) => {
+    const { characterId } = req.params;
+    const content = asText(req.body.content);
+    const diceRoll =
+      Number.isInteger(req.body.diceRoll) &&
+      req.body.diceRoll >= 1 &&
+      req.body.diceRoll <= 6
+        ? req.body.diceRoll
+        : null;
 
-  const diceRoll =
-    Number.isInteger(req.body.diceRoll) &&
-    req.body.diceRoll >= 1 &&
-    req.body.diceRoll <= 6
-      ? req.body.diceRoll
-      : null;
+    if (!content) fail(400, "Message cannot be empty.");
+    if (content.length > 6000) fail(400, "Message too long.");
 
-  if (!content)
-    return res.status(400).json({ error: "Message cannot be empty." });
-  if (content.length > 6000)
-    return res.status(400).json({ error: "Message too long." });
-  if (!tryLock(userId))
-    return res
-      .status(429)
-      .json({ error: "Wait for the previous response to complete." });
+    const char = await Character.findById(characterId).lean();
+    if (!char) fail(404, "Character not found.");
 
-  let headersSent = false;
-  let streamEnded = false;
-  const onClose = () => unlock(userId);
-  res.on("close", onClose);
+    let chat = await Chat.findOne({ userId: req.user._id, characterId }).lean();
 
-  try {
-    const [char, chat] = await Promise.all([
-      Character.findById(characterId).lean(),
-      Chat.findOne({ userId, characterId }),
-    ]);
-    if (!char) {
-      unlock(userId);
-      return res.status(404).json({ error: "Character not found" });
-    }
-
-    const isNewChat = !chat;
-    const activeChat =
-      chat ||
-      (await Chat.create({
-        userId,
+    // Brand-new chat (user skipped the Preloader): create it AND save the opening line.
+    if (!chat) {
+      const preloader = buildPreloader(req.body.preloader, char, req.user);
+      const created = await Chat.create({
+        userId: req.user._id,
         characterId,
-        preloader: req.body.preloader || {},
-      }));
-
-    const openingLine = isNewChat ? resolveOpeningLine(char, activeChat) : null;
-
-    const history = isNewChat
-      ? [{ role: "assistant", content: [openingLine] }]
-      : await Message.find({ chatId: activeChat._id })
-          .sort({ createdAt: -1 })
-          .limit(WINDOW_SIZE)
-          .lean()
-          .then((r) => r.reverse());
-
-    const systemPrompt = generateSystemPrompt({
-      char,
-      user: activeChat.preloader?.displayName || req.user,
-      pronouns: activeChat.preloader?.pronouns,
-      diceRoll,
-    });
-
-    const priority = hasActivePaidPlan(req.user.subscription) ? 10 : 1;
-
-    const payload = [
-      ...checkpointMessages(activeChat),
-      ...toPayloadMessages(history),
-      {
-        role: "user",
-        content: diceRoll ? `Roll: ${diceRoll}\n${content}` : content,
-      },
-    ];
-
-    startSSE(res);
-    headersSent = true;
-
-    const stream = await runGeneration(systemPrompt, payload, priority);
-    const { content: reply, mood } = await streamToClient(res, stream);
-
-    // ---------- CRITICAL DB SAVE (must happen before "[DONE]") ----------
-    const finalReply = reply || "*The connection was lost...*";
-    const now = Date.now();
-
-    if (isNewChat) {
+        preloader,
+      });
+      chat = created.toObject();
       await Message.create({
-        chatId: activeChat._id,
+        chatId: chat._id,
         role: "assistant",
-        content: [openingLine],
-        createdAt: new Date(now - 2000),
+        content: [preloader.firstMessage],
       });
     }
 
+    const history = await recentMessages(chat._id);
+    const { content: reply, mood } = await generateReply({
+      req,
+      res,
+      state,
+      char,
+      chat,
+      history,
+      diceRoll,
+      extra: [userPayload(content, diceRoll)],
+    });
+
+    // ---------- CRITICAL SAVE (before "[DONE]") ----------
+    const now = Date.now();
     await Message.insertMany([
       {
-        chatId: activeChat._id,
+        chatId: chat._id,
         role: "user",
         content: [content],
         diceRoll,
-        createdAt: new Date(now - 1000),
+        createdAt: new Date(now - 1),
       },
       {
-        chatId: activeChat._id,
+        chatId: chat._id,
         role: "assistant",
-        content: [finalReply],
+        content: [reply],
         createdAt: new Date(now),
       },
     ]);
-
-    const updated = await Chat.findByIdAndUpdate(
-      activeChat._id,
+    await Chat.updateOne(
+      { _id: chat._id },
       {
         $set: {
-          lastMessage: { text: finalReply, role: "assistant" },
+          lastMessage: { text: reply, role: "assistant" },
           lastMessageAt: new Date(now),
           "worldState.currentMood": mood,
         },
         $inc: { messageCount: 2, userMessageCount: 1 },
       },
-      { returnDocument: "after" },
     );
+    await trackUsage(req.user._id);
 
-    res.off("close", onClose);
-    finishStream(res, mood);
-    streamEnded = true;
-    unlock(userId);
+    finishStream(res, state, mood);
 
-    (async () => {
-      try {
-        await Character.findByIdAndUpdate(characterId, {
-          $inc: { interactionsCount: 1 },
-        });
-        await updateUserUsage(req.user._id);
-        await maybeCreateCheckpoint(updated, char);
-      } catch (err) {
-        console.error(
-          "Post-send non-critical persistence failed:",
-          err.message,
-        );
-      }
-    })();
-  } catch (error) {
-    console.error("sendMessage failed:", error.message);
-    unlock(userId);
-    if (!headersSent)
-      return res
-        .status(500)
-        .json({ error: "AI pipeline failure. Please try again." });
-    if (!streamEnded) emergencyClose(res);
-  }
-};
+    background("post-send", async () => {
+      await Character.updateOne(
+        { _id: characterId },
+        { $inc: { interactionsCount: 1 } },
+      );
+      await maybeCreateCheckpoint(chat._id, char);
+    });
+  });
 
 /* ============================================================
-   2. REPLAY (a.k.a. "Regenerate")
+   2. REPLAY (regenerate the last AI message as a new version)
 ============================================================ */
-export const replayMessage = async (req, res) => {
-  const userId = String(req.user._id);
-  const { characterId } = req.params;
-  if (!tryLock(userId))
-    return res
-      .status(429)
-      .json({ error: "Wait for the previous response to complete." });
-
-  let headersSent = false;
-  let streamEnded = false;
-
-  try {
+export const replayMessage = (req, res) =>
+  withLock(req, res, async (state) => {
+    const { characterId } = req.params;
     const [char, chat] = await Promise.all([
       Character.findById(characterId).lean(),
-      Chat.findOne({ userId, characterId }).lean(),
+      Chat.findOne({ userId: req.user._id, characterId }).lean(),
     ]);
-
-    if (!char || !chat) {
-      unlock(userId);
-      return res.status(404).json({ error: "Chat not found." });
-    }
+    if (!char || !chat) fail(404, "Chat not found.");
 
     const last = await Message.findOne({ chatId: chat._id }).sort({
       createdAt: -1,
     });
-    if (!last || last.role !== "assistant") {
-      unlock(userId);
-      return res.status(400).json({ error: "Nothing to replay." });
-    }
+    if (!last || last.role !== "assistant") fail(400, "Nothing to replay.");
 
-    const priorHistory = await Message.find({
-      chatId: chat._id,
-      _id: { $ne: last._id },
-    })
-      .sort({ createdAt: -1 })
-      .limit(WINDOW_SIZE)
-      .lean()
-      .then((r) => r.reverse());
+    const history = await recentMessages(chat._id, { excludeId: last._id });
+    if (!history.length) fail(400, "Nothing to replay.");
+    const diceRoll =
+      [...history].reverse().find((m) => m.role === "user")?.diceRoll ?? null;
 
-    const precedingUserTurn = [...priorHistory]
-      .reverse()
-      .find((m) => m.role === "user");
-    const diceRoll = precedingUserTurn?.diceRoll ?? null;
-
-    const systemPrompt = generateSystemPrompt({
+    const { content: reply, mood } = await generateReply({
+      req,
+      res,
+      state,
       char,
-      user: req.user,
-      pronouns: chat.preloader?.pronouns,
+      chat,
+      history,
       diceRoll,
     });
-    const payload = [
-      ...checkpointMessages(chat),
-      ...toPayloadMessages(priorHistory),
-    ];
-    const priority = hasActivePaidPlan(req.user.subscription) ? 10 : 1;
 
-    startSSE(res);
-    headersSent = true;
-
-    const stream = await runGeneration(systemPrompt, payload, priority);
-    const { content: reply, mood } = await streamToClient(res, stream);
-
-    // ---------- CRITICAL DB SAVE ----------
     pushNewVersion(last, reply);
     await last.save();
-
     await Chat.updateOne(
       { _id: chat._id },
       { $set: { "worldState.currentMood": mood } },
     );
+    await trackUsage(req.user._id);
 
-    finishStream(res, mood);
-    streamEnded = true;
-  } catch (error) {
-    console.error("replayMessage failed:", error.message);
-    if (!headersSent)
-      return res
-        .status(500)
-        .json({ error: "AI pipeline failure. Please try again." });
-    if (!streamEnded) emergencyClose(res);
-  } finally {
-    unlock(userId);
-  }
-};
+    finishStream(res, state, mood);
+  });
 
 /* ============================================================
    3. SELECT ALTERNATE
 ============================================================ */
-export const selectAlternate = async (req, res) => {
-  try {
-    const { messageId } = req.params;
-    const { alternateIndex } = req.body;
+export const selectAlternate = route(async (req, res) => {
+  const index = Number(req.body.alternateIndex);
+  const { msg } = await getOwnedMessage(req.params.messageId, req.user._id);
 
-    const msg = await Message.findById(messageId);
-    const versions = getVersions(msg);
+  if (!Number.isInteger(index) || index < 0 || index >= getVersions(msg).length)
+    fail(404, "Alternate not found.");
 
-    if (!msg || alternateIndex < 0 || alternateIndex >= versions.length) {
-      return res.status(404).json({ error: "Alternate not found." });
-    }
-
-    msg.selectedAlternateIndex = alternateIndex;
-    await msg.save();
-
-    return res.status(200).json({ success: true, message: msg });
-  } catch (error) {
-    return res
-      .status(500)
-      .json({ error: "Failed to select alternate.", detail: error.message });
-  }
-};
+  msg.selectedAlternateIndex = index;
+  await msg.save();
+  res.status(200).json({ success: true, message: msg });
+});
 
 /* ============================================================
    4. CONTINUE
 ============================================================ */
-export const continueMessage = async (req, res) => {
-  const userId = String(req.user._id);
-  const { characterId } = req.params;
-  if (!tryLock(userId))
-    return res
-      .status(429)
-      .json({ error: "Wait for the previous response to complete." });
-
-  let headersSent = false;
-  let streamEnded = false;
-  const onClose = () => unlock(userId);
-  res.on("close", onClose);
-
-  try {
+export const continueMessage = (req, res) =>
+  withLock(req, res, async (state) => {
+    const { characterId } = req.params;
     const [char, chat] = await Promise.all([
       Character.findById(characterId).lean(),
-      Chat.findOne({ userId, characterId }).lean(),
+      Chat.findOne({ userId: req.user._id, characterId }).lean(),
     ]);
-    if (!char || !chat) {
-      unlock(userId);
-      return res.status(404).json({ error: "Chat not found." });
-    }
+    if (!char || !chat) fail(404, "Chat not found.");
 
-    const history = await Message.find({ chatId: chat._id })
-      .sort({ createdAt: -1 })
-      .limit(WINDOW_SIZE)
-      .lean()
-      .then((r) => r.reverse());
+    const history = await recentMessages(chat._id);
+    if (!history.length || history[history.length - 1].role !== "assistant")
+      fail(400, "Can only continue when the last message is from the AI.");
 
-    if (!history.length || history[history.length - 1].role !== "assistant") {
-      unlock(userId);
-      return res.status(400).json({
-        error: "Can only continue when the last message is from the AI.",
-      });
-    }
-
-    const systemPrompt = generateSystemPrompt({
+    const { content: reply, mood } = await generateReply({
+      req,
+      res,
+      state,
       char,
-      user: req.user,
-      pronouns: chat.preloader?.pronouns,
-      diceRoll: null,
-    });
-    const payload = [
-      ...checkpointMessages(chat),
-      ...toPayloadMessages(history),
-      {
-        role: "user",
-        content:
-          "[Continue the previous narrative seamlessly. Do not repeat what was already said.]",
-      },
-    ];
-    const priority = hasActivePaidPlan(req.user.subscription) ? 10 : 1;
-
-    startSSE(res);
-    headersSent = true;
-
-    const stream = await runGeneration(systemPrompt, payload, priority, 1500);
-    const { content: reply, mood } = await streamToClient(res, stream);
-
-    // ---------- CRITICAL DB SAVE ----------
-    await Message.create({
-      chatId: chat._id,
-      role: "assistant",
-      content: [reply],
-      isContinuation: true,
-    });
-
-    await Chat.updateOne(
-      { _id: chat._id },
-      {
-        $set: {
-          lastMessage: { text: reply, role: "assistant" },
-          lastMessageAt: new Date(),
-          "worldState.currentMood": mood,
+      chat,
+      history,
+      maxTokens: 1500,
+      extra: [
+        {
+          role: "user",
+          content:
+            "[Continue the previous narrative seamlessly. Do not repeat what was already said.]",
         },
-        $inc: { messageCount: 1 },
-      },
-    );
+      ],
+    });
 
-    res.off("close", onClose);
-    finishStream(res, mood);
-    streamEnded = true;
-    unlock(userId);
+    await saveAssistantReply(chat._id, reply, mood, { isContinuation: true });
+    await trackUsage(req.user._id);
 
-    (async () => {
-      try {
-        await updateUserUsage(req.user._id);
-      } catch (err) {
-        console.error("Continue non-critical persistence failed:", err.message);
-      }
-    })();
-  } catch (error) {
-    console.error("continueMessage failed:", error.message);
-    unlock(userId);
-    if (!headersSent)
-      return res
-        .status(500)
-        .json({ error: "AI pipeline failure. Please try again." });
-    if (!streamEnded) emergencyClose(res);
-  }
-};
+    finishStream(res, state, mood);
+  });
 
 /* ============================================================
    5. EDIT MESSAGE
+   - AI message: silent edit, no AI call.
+   - User message: GENERATE FIRST, and only if it succeeds save the edit,
+     delete everything after it and store the new reply.
+     If the AI fails, the old conversation stays untouched.
 ============================================================ */
 export const editMessage = async (req, res) => {
-  const { messageId } = req.params;
-  const newContent = (req.body.content || "").trim();
-  if (!newContent)
-    return res.status(400).json({ error: "Content cannot be empty." });
-
-  let msg;
   try {
-    msg = await Message.findById(messageId);
-    if (!msg) return res.status(404).json({ error: "Message not found." });
+    const newContent = asText(req.body.content);
+    if (!newContent) fail(400, "Content cannot be empty.");
 
-    pushNewVersion(msg, newContent);
-    msg.isEdited = true;
-    await msg.save();
-  } catch (error) {
-    return res
-      .status(500)
-      .json({ error: "Failed to edit message.", detail: error.message });
-  }
-
-  if (msg.role === "assistant") {
-    return res
-      .status(200)
-      .json({ success: true, regenerated: false, message: msg });
-  }
-
-  /* ---------- User message was edited → everything after it is stale ---------- */
-  const userId = String(req.user._id);
-  if (!tryLock(userId))
-    return res
-      .status(429)
-      .json({ error: "Wait for the previous response to complete." });
-
-  let headersSent = false;
-  let streamEnded = false;
-  const onClose = () => unlock(userId);
-  res.on("close", onClose);
-
-  try {
-    await Message.deleteMany({
-      chatId: msg.chatId,
-      createdAt: { $gt: msg.createdAt },
-    });
-
-    const userTurns = await Message.countDocuments({
-      chatId: msg.chatId,
-      role: "user",
-    });
-    const chat = await Chat.findOneAndUpdate(
-      { _id: msg.chatId },
-      { $set: { userMessageCount: userTurns } },
-      { returnDocument: "after" },
-    ).lean();
-
-    if (!chat) {
-      unlock(userId);
-      return res.status(404).json({ error: "Chat not found." });
-    }
-
-    const char = await Character.findById(chat.characterId).lean();
-    if (!char) {
-      unlock(userId);
-      return res.status(404).json({ error: "Character not found." });
-    }
-
-    const history = await Message.find({ chatId: chat._id })
-      .sort({ createdAt: -1 })
-      .limit(WINDOW_SIZE)
-      .lean()
-      .then((r) => r.reverse());
-
-    const diceRoll = msg.diceRoll ?? null;
-    const systemPrompt = generateSystemPrompt({
-      char,
-      user: chat.preloader?.displayName || req.user,
-      pronouns: chat.preloader?.pronouns,
-      diceRoll,
-    });
-    const payload = [
-      ...checkpointMessages(chat),
-      ...toPayloadMessages(history),
-    ];
-    const priority = hasActivePaidPlan(req.user.subscription) ? 10 : 1;
-
-    startSSE(res);
-    headersSent = true;
-
-    const stream = await runGeneration(systemPrompt, payload, priority);
-    const { content: reply, mood } = await streamToClient(res, stream);
-
-    // ---------- CRITICAL DB SAVE ----------
-    const finalReply = reply || "*The connection was lost...*";
-    await Message.create({
-      chatId: chat._id,
-      role: "assistant",
-      content: [finalReply],
-    });
-
-    const updated = await Chat.findByIdAndUpdate(
-      chat._id,
-      {
-        $set: {
-          lastMessage: { text: finalReply, role: "assistant" },
-          lastMessageAt: new Date(),
-          "worldState.currentMood": mood,
-        },
-        $inc: { messageCount: 1 },
-      },
-      { returnDocument: "after" },
+    const { msg, chat } = await getOwnedMessage(
+      req.params.messageId,
+      req.user._id,
     );
 
-    res.off("close", onClose);
-    finishStream(res, mood);
-    streamEnded = true;
-    unlock(userId);
+    if (msg.role === "assistant") {
+      pushNewVersion(msg, newContent);
+      msg.isEdited = true;
+      await msg.save();
+      return res
+        .status(200)
+        .json({ success: true, regenerated: false, message: msg });
+    }
 
-    (async () => {
-      try {
-        await Character.findByIdAndUpdate(chat.characterId, {
-          $inc: { interactionsCount: 1 },
-        });
-        await updateUserUsage(req.user._id);
-        await maybeCreateCheckpoint(updated, char);
-      } catch (err) {
-        console.error(
-          "Post-edit non-critical persistence failed:",
-          err.message,
-        );
-      }
-    })();
-  } catch (error) {
-    console.error("editMessage regeneration failed:", error.message);
-    unlock(userId);
-    if (!headersSent)
-      return res.status(500).json({
-        error: "AI pipeline failure. Please try again.",
-        detail: error.message,
+    if (newContent.length > 6000) fail(400, "Message too long.");
+
+    await withLock(req, res, async (state) => {
+      const char = await Character.findById(chat.characterId).lean();
+      if (!char) fail(404, "Character not found.");
+
+      // The chat as it will be after the edit: user messages up to and
+      // including this one, and only the checkpoints that still apply.
+      const keepCount = await Message.countDocuments({
+        chatId: msg.chatId,
+        role: "user",
+        createdAt: { $lte: msg.createdAt },
       });
-    if (!streamEnded) emergencyClose(res);
+      const history = await recentMessages(msg.chatId, {
+        before: msg.createdAt,
+      });
+
+      const { content: reply, mood } = await generateReply({
+        req,
+        res,
+        state,
+        char,
+        chat: chatAsOf(chat, keepCount),
+        history,
+        diceRoll: msg.diceRoll ?? null,
+        extra: [userPayload(newContent, msg.diceRoll ?? null)],
+      });
+
+      // ---------- AI succeeded: NOW change the DB ----------
+      pushNewVersion(msg, newContent);
+      msg.isEdited = true;
+      await msg.save();
+
+      await Message.deleteMany({
+        chatId: msg.chatId,
+        createdAt: { $gt: msg.createdAt },
+      });
+      const fresh = await resyncChat(msg.chatId);
+
+      await saveAssistantReply(fresh._id, reply, mood);
+      await trackUsage(req.user._id);
+
+      finishStream(res, state, mood);
+      background("post-edit", async () => {
+        await Character.updateOne(
+          { _id: fresh.characterId },
+          { $inc: { interactionsCount: 1 } },
+        );
+        await maybeCreateCheckpoint(fresh._id, char);
+      });
+    });
+  } catch (err) {
+    sendError(res, err);
   }
 };
 
 /* ============================================================
-   6. DELETE MESSAGE
+   6. DELETE MESSAGE (deletes it and everything after it).
+   If an AI reply to a user message is deleted, a new reply is generated
+   FIRST; the old messages are removed only after that succeeded.
 ============================================================ */
-export const deleteMessage = async (req, res) => {
-  const userId = String(req.user._id);
-  const { characterId, messageId } = req.params;
-  if (!tryLock(userId))
-    return res
-      .status(429)
-      .json({ error: "Wait for the previous response to complete." });
+export const deleteMessage = (req, res) =>
+  withLock(req, res, async (state) => {
+    const { msg, chat } = await getOwnedMessage(
+      req.params.messageId,
+      req.user._id,
+    );
 
-  let headersSent = false;
-  let streamEnded = false;
+    const history = await recentMessages(msg.chatId, { before: msg.createdAt });
+    const previous = history[history.length - 1];
+    const shouldRegen = msg.role === "assistant" && previous?.role === "user";
 
-  try {
-    const msg = await Message.findById(messageId);
-    if (!msg) {
-      unlock(userId);
-      return res.status(404).json({ error: "Message not found." });
+    // Plain delete: no AI call, nothing that can fail halfway.
+    if (!shouldRegen) {
+      await Message.deleteMany({
+        chatId: msg.chatId,
+        createdAt: { $gte: msg.createdAt },
+      });
+      await resyncChat(msg.chatId);
+      return res.status(200).json({ success: true, regenerated: false });
     }
 
-    const previous = await Message.findOne({
+    const char = await Character.findById(chat.characterId).lean();
+    if (!char) fail(404, "Character not found.");
+
+    const keepCount = await Message.countDocuments({
       chatId: msg.chatId,
+      role: "user",
       createdAt: { $lt: msg.createdAt },
-    }).sort({ createdAt: -1 });
+    });
+
+    const { content: reply, mood } = await generateReply({
+      req,
+      res,
+      state,
+      char,
+      chat: chatAsOf(chat, keepCount),
+      history,
+      diceRoll: previous.diceRoll ?? null,
+    });
+
+    // ---------- AI succeeded: NOW delete + save ----------
     await Message.deleteMany({
       chatId: msg.chatId,
       createdAt: { $gte: msg.createdAt },
     });
+    const fresh = await resyncChat(msg.chatId);
 
-    const userTurns = await Message.countDocuments({
-      chatId: msg.chatId,
-      role: "user",
-    });
-    await Chat.updateOne(
-      { _id: msg.chatId },
-      { $set: { userMessageCount: userTurns } },
-    );
+    await saveAssistantReply(fresh._id, reply, mood);
+    await trackUsage(req.user._id);
 
-    const shouldAutoRegen =
-      msg.role === "assistant" && (!previous || previous.role === "user");
-    if (!shouldAutoRegen) {
-      unlock(userId);
-      return res.status(200).json({ success: true, regenerated: false });
-    }
-
-    const [char, chat] = await Promise.all([
-      Character.findById(characterId).lean(),
-      Chat.findOne({ _id: msg.chatId }).lean(),
-    ]);
-    const history = await Message.find({ chatId: msg.chatId })
-      .sort({ createdAt: -1 })
-      .limit(WINDOW_SIZE)
-      .lean()
-      .then((r) => r.reverse());
-
-    const precedingUserTurn = [...history]
-      .reverse()
-      .find((m) => m.role === "user");
-    const diceRoll = precedingUserTurn?.diceRoll ?? null;
-
-    const systemPrompt = generateSystemPrompt({
-      char,
-      user: req.user,
-      pronouns: chat.preloader?.pronouns,
-      diceRoll,
-    });
-    const payload = [
-      ...checkpointMessages(chat),
-      ...toPayloadMessages(history),
-    ];
-    const priority = hasActivePaidPlan(req.user.subscription) ? 10 : 1;
-
-    startSSE(res);
-    headersSent = true;
-
-    const stream = await runGeneration(systemPrompt, payload, priority);
-    const { content: reply, mood } = await streamToClient(res, stream);
-
-    // ---------- CRITICAL DB SAVE ----------
-    await Message.create({
-      chatId: msg.chatId,
-      role: "assistant",
-      content: [reply],
-    });
-
-    await Chat.updateOne(
-      { _id: msg.chatId },
-      {
-        $set: {
-          lastMessage: { text: reply, role: "assistant" },
-          lastMessageAt: new Date(),
-          "worldState.currentMood": mood,
-        },
-        $inc: { messageCount: 1 },
-      },
-    );
-
-    finishStream(res, mood);
-    streamEnded = true;
-  } catch (error) {
-    console.error("deleteMessage failed:", error.message);
-    if (!headersSent)
-      return res
-        .status(500)
-        .json({ error: "Failed to delete message.", detail: error.message });
-    if (!streamEnded) emergencyClose(res);
-  } finally {
-    unlock(userId);
-  }
-};
+    finishStream(res, state, mood);
+  });
 
 /* ============================================================
-   7. CHECKPOINT MANAGEMENT (edit / delete from the side drawer)
+   7. CHECKPOINT MANAGEMENT (only the chat's owner can touch them)
 ============================================================ */
-export const editCheckpoint = async (req, res) => {
-  try {
-    const { chatId, checkpointId } = req.params;
-    const text = truncateSafely((req.body.text || "").trim(), 3000);
-    if (!text)
-      return res
-        .status(400)
-        .json({ error: "Checkpoint text cannot be empty." });
+export const editCheckpoint = route(async (req, res) => {
+  const { chatId, checkpointId } = req.params;
+  const text = truncateSafely(asText(req.body.text), 3000);
+  if (!text) fail(400, "Checkpoint text cannot be empty.");
 
-    await Chat.updateOne(
-      { _id: chatId, "checkpoints._id": checkpointId },
-      { $set: { "checkpoints.$.text": text } },
-    );
-    return res.status(200).json({ success: true });
-  } catch (error) {
+  const result = await Chat.updateOne(
+    { _id: chatId, userId: req.user._id, "checkpoints._id": checkpointId },
+    { $set: { "checkpoints.$.text": text, "checkpoints.$.edited": true } },
+  );
+  if (!result.matchedCount) fail(404, "Checkpoint not found.");
+  res.status(200).json({ success: true });
+});
+
+export const deleteCheckpoint = route(async (req, res) => {
+  const { chatId, checkpointId } = req.params;
+  const result = await Chat.updateOne(
+    { _id: chatId, userId: req.user._id },
+    { $pull: { checkpoints: { _id: checkpointId } } },
+  );
+  if (!result.matchedCount) fail(404, "Chat not found.");
+  res.status(200).json({ success: true });
+});
+
+/* ============================================================
+   8. READ-ONLY / HOUSEKEEPING
+============================================================ */
+export const getChatHistory = route(async (req, res) => {
+  const { characterId } = req.params;
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(100, parseInt(req.query.limit) || 50);
+
+  const [chat, char] = await Promise.all([
+    Chat.findOne({ userId: req.user._id, characterId }).lean(),
+    Character.findById(characterId).select("name images firstDialogues").lean(),
+  ]);
+
+  // `characterName` kept too, in case the frontend still reads the old key.
+  const characterData = {
+    name: char?.name,
+    characterName: char?.name,
+    images: char?.images,
+    startingMessage: char?.firstDialogues?.[0],
+  };
+
+  // History must never be served from a cache.
+  res.setHeader("Cache-Control", "no-store");
+
+  if (!chat) {
     return res
-      .status(500)
-      .json({ error: "Failed to edit checkpoint.", detail: error.message });
+      .status(200)
+      .json({ success: true, messages: [], hasMore: false, characterData });
   }
-};
 
-export const deleteCheckpoint = async (req, res) => {
-  try {
-    const { chatId, checkpointId } = req.params;
-    await Chat.updateOne(
-      { _id: chatId },
-      { $pull: { checkpoints: { _id: checkpointId } } },
-    );
-    return res.status(200).json({ success: true });
-  } catch (error) {
+  const messages = await Message.find({ chatId: chat._id })
+    .sort({ createdAt: -1 })
+    .skip((page - 1) * limit)
+    .limit(limit)
+    .lean();
+
+  res.status(200).json({
+    success: true,
+    chatId: chat._id,
+    messages: messages.reverse(),
+    hasMore: messages.length === limit,
+    currentPage: page,
+    checkpoints: sortedCheckpoints(chat),
+    worldState: chat.worldState,
+    characterData,
+  });
+});
+
+export const getRecentChats = route(async (req, res) => {
+  const chats = await Chat.find({ userId: req.user._id })
+    .sort({ lastMessageAt: -1 })
+    .limit(50)
+    .select("characterId lastMessage lastMessageAt")
+    .populate({ path: "characterId", select: "name images" })
+    .lean();
+  res.status(200).json({ success: true, chats });
+});
+
+export const clearChatHistory = route(async (req, res) => {
+  const chat = await Chat.findOne({
+    userId: req.user._id,
+    characterId: req.params.characterId,
+  }).lean();
+
+  if (!chat) {
     return res
-      .status(500)
-      .json({ error: "Failed to delete checkpoint.", detail: error.message });
+      .status(200)
+      .json({ success: true, message: "Chat is already empty." });
   }
-};
+
+  await Promise.all([
+    Message.deleteMany({ chatId: chat._id }),
+    Chat.findByIdAndDelete(chat._id),
+  ]);
+  res.status(200).json({
+    success: true,
+    message: "Story reset. Start fresh whenever you're ready.",
+  });
+});
 
 /* ============================================================
-   8. READ-ONLY / HOUSEKEEPING ENDPOINTS
+   9. SELECT INITIAL MESSAGE (Preloader screen -> creates the chat)
 ============================================================ */
+export const selectInitialMessage = route(async (req, res) => {
+  const { characterId } = req.params;
+  const { displayName, pronoun, firstMessage } = req.body?.preloader || {};
 
-export const getChatHistory = async (req, res) => {
-  try {
-    const { characterId } = req.params;
-    const userId = req.user._id.toString();
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.min(100, parseInt(req.query.limit) || 50);
+  const name = asText(displayName).slice(0, 50);
+  if (!name || firstMessage === undefined || firstMessage === null)
+    fail(400, "Missing required fields.");
+  if (!PRONOUNS.includes(pronoun))
+    fail(400, `pronoun must be one of: ${PRONOUNS.join(", ")}`);
 
-    const [chat, char] = await Promise.all([
-      Chat.findOne({ userId, characterId }).lean(),
-      Character.findById(characterId)
-        .select("characterName images firstDialogues")
-        .lean(),
-    ]);
+  const char = await Character.findById(characterId).lean();
+  if (!char) fail(404, "Character not found.");
 
-    if (!chat) {
-      return res.status(200).json({
-        success: true,
-        messages: [],
-        hasMore: false,
-        characterData: {
-          characterName: char?.characterName,
-          images: char?.images,
-          startingMessage: char?.firstDialogues?.[0],
-        },
-      });
-    }
+  if (await Chat.exists({ userId: req.user._id, characterId }))
+    fail(
+      409,
+      "A chat with this character already exists. Clear it to start over.",
+    );
 
-    const messages = await Message.find({ chatId: chat._id })
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(limit)
-      .lean();
-
-    return res.status(200).json({
-      success: true,
-      chatId: chat._id,
-      messages: messages.reverse(),
-      hasMore: messages.length === limit,
-      currentPage: page,
-      checkpoints: (chat.checkpoints || []).sort(
-        (a, b) => a.atUserMessageCount - b.atUserMessageCount,
-      ),
-      worldState: chat.worldState,
-      characterData: {
-        characterName: char?.characterName,
-        images: char?.images,
-        startingMessage: char?.firstDialogues?.[0],
-      },
-    });
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: "Failed to fetch chat history.",
-      error: error.message,
-    });
+  // firstMessage is either custom text, or an index into char.firstDialogues
+  let initialMessage;
+  if (typeof firstMessage === "string") {
+    initialMessage = firstMessage.trim();
+  } else if (Number.isInteger(firstMessage) && firstMessage >= 0) {
+    initialMessage = asText(char.firstDialogues?.[firstMessage]);
+  } else {
+    fail(400, "firstMessage must be a string or a non-negative index.");
   }
-};
+  if (!initialMessage || initialMessage.length > 6000)
+    fail(
+      400,
+      "Could not resolve the initial message (empty, too long, or index out of range).",
+    );
 
-export const getRecentChats = async (req, res) => {
-  try {
-    const chats = await Chat.find({ userId: req.user._id })
-      .sort({ lastMessageAt: -1 })
-      .limit(50)
-      .select("characterId lastMessage lastMessageAt")
-      .populate({
-        path: "characterId",
-        select: "name images",
-      })
-      .lean();
+  initialMessage = fillPlaceholders(initialMessage, {
+    userName: name,
+    charName: char.name,
+  });
 
-    return res.status(200).json({ success: true, chats });
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: "Failed to get recent chats.",
-      error: error.message,
-    });
-  }
-};
+  const chat = await Chat.create({
+    userId: req.user._id,
+    characterId,
+    preloader: {
+      displayName: name,
+      pronouns: pronoun,
+      firstMessage: initialMessage,
+    },
+    checkpoints: [],
+    worldState: {},
+  });
 
-export const clearChatHistory = async (req, res) => {
-  try {
-    const { characterId } = req.params;
-    const chat = await Chat.findOne({
-      userId: req.user._id,
-      characterId,
-    }).lean();
-    if (!chat)
-      return res
-        .status(200)
-        .json({ success: true, message: "Chat is already empty." });
+  await Message.create({
+    chatId: chat._id,
+    role: "assistant",
+    content: [initialMessage],
+  });
 
-    await Promise.all([
-      Message.deleteMany({ chatId: chat._id }),
-      Chat.findByIdAndDelete(chat._id),
-    ]);
-    return res.status(200).json({
-      success: true,
-      message: "Story reset. Start fresh whenever you're ready.",
-    });
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: "Failed to clear chat.",
-      error: error.message,
-    });
-  }
-};
-
-/* ============================================================
-   9. SELECT INITIAL MESSAGE
-============================================================ */
-export const selectInitialMessage = async (req, res) => {
-  try {
-    const { characterId } = req.params;
-
-    const userId = req.user?._id?.toString();
-    if (!userId) {
-      return res.status(401).json({ error: "Unauthorized request." });
-    }
-
-    const { displayName, pronoun, firstMessage } = req.body?.preloader || {};
-
-    if (
-      !displayName ||
-      displayName.trim() === "" ||
-      !pronoun ||
-      firstMessage === undefined ||
-      firstMessage === null
-    ) {
-      return res.status(400).json({ error: "Missing required fields." });
-    }
-
-    if (typeof firstMessage === "number" && firstMessage < 0) {
-      return res
-        .status(400)
-        .json({ error: "Invalid first message index. Must be 0 or greater." });
-    } else if (
-      typeof firstMessage !== "string" &&
-      typeof firstMessage !== "number"
-    ) {
-      return res
-        .status(400)
-        .json({ error: "firstMessage must be a string or a number (index)." });
-    }
-
-    const char = await Character.findById(characterId).lean();
-    if (!char) {
-      return res.status(404).json({ error: "Character not found." });
-    }
-
-    let initialMessage;
-    if (typeof firstMessage === "string") {
-      initialMessage = firstMessage.trim();
-    } else {
-      const FIRST_DIALOGUE_KEYS = [
-        "firstDialogues",
-        "firstMessages",
-        "greetings",
-        "dialogues",
-      ];
-      let dialoguesArray = [];
-      for (const key of FIRST_DIALOGUE_KEYS) {
-        if (Array.isArray(char[key]) && char[key].length > 0) {
-          dialoguesArray = char[key];
-          break;
-        }
-      }
-      initialMessage = dialoguesArray[firstMessage]?.trim();
-    }
-
-    if (!initialMessage) {
-      return res.status(400).json({
-        error:
-          "Could not resolve the initial message. The index provided may be out of bounds or empty.",
-      });
-    }
-
-    const chat = await Chat.create({
-      userId,
-      characterId,
-      preloader: {
-        displayName: displayName.trim(),
-        pronouns: pronoun,
-        firstMessage: initialMessage,
-      },
-      checkpoints: [],
-      worldState: {},
-    });
-
-    await Message.create({
-      chatId: chat._id,
-      role: "assistant",
-      content: [initialMessage],
-    });
-
-    return res.status(201).json({
-      success: true,
-      message: "Initial message selected and chat created successfully.",
-      chat,
-      initialMessage,
-    });
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: "Failed to select initial message.",
-      error: error.message,
-    });
-  }
-};
+  res.status(201).json({
+    success: true,
+    message: "Initial message selected and chat created successfully.",
+    chat,
+    initialMessage,
+  });
+});

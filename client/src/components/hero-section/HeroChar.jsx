@@ -1,16 +1,17 @@
-import React, { useState, useMemo, useEffect, useCallback, memo } from "react";
-import { Play, ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
+import React, { useState, useCallback } from "react";
+import { Play, ChevronLeft, ChevronRight, Loader2, Flame } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { getTrendingChar } from '../../api-calls/topTrendingChar.js';
+import { getTrendingChar } from "../../api-calls/topTrendingChar.js";
 
-// ─── Fallback data ────────────────────────────────────────────────────────────
+// ─── Fallback data ──────────────────────────────────────────────────────────
 const DEFAULT_CHARACTER_DATA = [
     {
         _id: "eileen-crow",
         characterName: "Eileen Crow",
         storyName: "The Last Hunt Before Dawn",
-        characterDescription: "A silent executioner of corrupted hunters, walking the cursed streets before dawn.",
+        characterDescription:
+            "A silent executioner of corrupted hunters, walking the cursed streets before dawn.",
         traits: ["A-Rank Assassin", "Shadow Agile"],
         cta: "Enter the Hunt",
     },
@@ -18,97 +19,68 @@ const DEFAULT_CHARACTER_DATA = [
         _id: "kael-draven",
         characterName: "Kael Draven",
         storyName: "Ashes of the Fallen King",
-        characterDescription: "A cursed warrior bound to a throne he never wanted. The flames demand a heavier price.",
+        characterDescription:
+            "A cursed warrior bound to a throne he never wanted. The flames demand a heavier price.",
         traits: ["Flame Bearer", "Cursed King"],
         cta: "Join the War",
     },
 ];
 
-// ─── Normalize API → internal shape ──────────────────────────────────────────
 const normalizeChar = (c) => ({
     id: c._id || c.id,
     name: c.characterName || c.name || "Unknown",
-    storyTitle: c.storyName || c.storyTitle || "",
     description: c.characterDescription || c.description || "",
     traits: c.traits || [],
     image: c.profilePicture || "",
-    cta: c.cta || "Read Story",
-    interactionsCount: c.messageCount || 0,
+    cta: c.cta || "Begin Adventure",
+    interactions: c.messageCount || 0,
 });
 
-// ─── Pure CSS Animations (GPU Accelerated) ───────────────────────────────────
-const InjectStyles = memo(() => (
-    <style>{`
-        @keyframes fadeSlideUp {
-            from { opacity: 0; transform: translate3d(0, 15px, 0); }
-            to { opacity: 1; transform: translate3d(0, 0, 0); }
-        }
-        @keyframes fadeSlideRight {
-            from { opacity: 0; transform: translate3d(20px, 0, 0); }
-            to { opacity: 1; transform: translate3d(0, 0, 0); }
-        }
-        .animate-fade-up { 
-            animation: fadeSlideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards; 
-            will-change: opacity, transform;
-        }
-        .animate-fade-right { 
-            animation: fadeSlideRight 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards; 
-            will-change: opacity, transform;
-        }
-    `}</style>
-));
-
-// ─── Sleek UI Components ─────────────────────────────────────────────────────
-const PulsingDot = memo(() => (
-    <span className="relative flex h-1.5 w-1.5">
-        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#00E676] opacity-75"></span>
-        <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-[#00E676]"></span>
-    </span>
-));
-
-const TraitPill = memo(({ trait }) => (
-    <span className="px-3.5 py-1.5 rounded-sm bg-white/[0.03] border border-white/10 text-zinc-300 text-[10px] font-medium tracking-wide hover:bg-white/10 hover:text-white transition-colors cursor-default backdrop-blur-md uppercase">
+// ─── Small presentational pieces ────────────────────────────────────────────
+const TraitPill = ({ trait }) => (
+    <span className="px-3 py-1.5 rounded-full bg-white/[0.06] border border-white/10 text-zinc-300 text-xs font-medium backdrop-blur-sm">
         {trait}
     </span>
-));
+);
 
-const Pips = memo(({ total, current, onSelect }) => (
+const Pips = ({ total, current, onSelect }) => (
     <div className="flex items-center gap-2">
         {Array.from({ length: total }, (_, i) => (
             <button
                 key={i}
                 onClick={() => onSelect(i)}
                 aria-label={`Go to character ${i + 1}`}
-                className={`h-[3px] rounded-full transition-all duration-500 ease-out ${i === current ? "w-8 bg-[#00E676] shadow-[0_0_8px_rgba(0,230,118,0.6)]" : "w-3 bg-white/30 hover:bg-white/60"
-                    }`}
+                className={`h-1 rounded-full transition-all duration-300 ${
+                    i === current ? "w-7 bg-[#00E676]" : "w-3 bg-white/25 hover:bg-white/50"
+                }`}
             />
         ))}
     </div>
-));
+);
 
-// Optimized Native CSS Crossfade Image Component
-const CharImage = memo(({ char, isActive, isAdjacent }) => {
-    // Only mount the image if it is active, or right next to the active one to save DOM memory.
-    if (!isActive && !isAdjacent) return null;
+// The trending / interaction badge — one bold, sleek chip instead of two tiny ones.
+const StatusBar = ({ rank, interactions }) => (
+    <div className="inline-flex items-center gap-3 sm:gap-4 mb-5 lg:mb-7">
+        <div className="flex items-center gap-1.5 pl-2.5 pr-3.5 py-1.5 rounded-full bg-[#00E676] text-black">
+            <Flame className="w-4 h-4 fill-black" />
+            <span className="text-xs sm:text-sm font-extrabold">#{rank} Trending</span>
+        </div>
+        <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white/10 border border-white/10 backdrop-blur-sm">
+            <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#00E676] opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-[#00E676]" />
+            </span>
+            <span className="text-white text-xs sm:text-sm font-bold">
+                {(interactions * 10000).toLocaleString()}
+                <span className="text-zinc-400 font-medium"> interacting</span>
+            </span>
+        </div>
+    </div>
+);
 
-    return (
-        <img
-            src={char.image}
-            alt={char.name}
-            // Eager load only the active image. Lazy load adjacent ones.
-            fetchpriority={isActive ? "high" : "low"}
-            loading={isActive ? "eager" : "lazy"}
-            decoding="async"
-            style={{ willChange: "transform, opacity" }}
-            className={`absolute inset-0 w-full h-full object-cover object-top transition-[opacity,transform] duration-[1.2s] ease-[cubic-bezier(0.16,1,0.3,1)] ${isActive ? "opacity-100 scale-100 z-10" : "opacity-0 scale-[1.03] z-0 pointer-events-none"
-                }`}
-        />
-    );
-});
-
-// ─── Main component ───────────────────────────────────────────────────────────
+// ─── Main component ─────────────────────────────────────────────────────────
 const HeroChar = () => {
-    const [currentIndex, setCurrentIndex] = useState(0);
+    const [index, setIndex] = useState(0);
 
     const { data, isLoading, isError, refetch } = useQuery({
         queryKey: ["topTrendingChar"],
@@ -117,218 +89,127 @@ const HeroChar = () => {
         retry: 2,
     });
 
-    const characterData = useMemo(() => {
-        const raw = data?.data || data;
-        const list = Array.isArray(raw) ? raw : DEFAULT_CHARACTER_DATA;
-        return list.map(normalizeChar);
-    }, [data]);
-
-    const total = characterData.length;
-    const activeChar = characterData[currentIndex] ?? characterData[0];
-
-    const nameParts = activeChar?.name.trim().split(" ") ?? [];
-    const nameFirst = nameParts[0] ?? "";
-    const nameRest = nameParts.slice(1).join(" ");
-
-    const traits = useMemo(() => {
-        return (activeChar?.traits?.length > 0
-            ? activeChar.traits
-            : [activeChar?.storyTitle]
-        ).filter(Boolean).slice(0, 3);
-    }, [activeChar]);
-
-    const interactionCount = useMemo(() =>
-        ((activeChar?.interactionsCount || 0) * 10000).toLocaleString(),
-        [activeChar]);
-
-    const goTo = useCallback((index) => setCurrentIndex((index + total) % total), [total]);
-    const handlePrev = useCallback(() => goTo(currentIndex - 1), [goTo, currentIndex]);
-    const handleNext = useCallback(() => goTo(currentIndex + 1), [goTo, currentIndex]);
-
-    // Offload preloading to not block the main thread animation
-    useEffect(() => {
-        const timeoutId = setTimeout(() => {
-            [(currentIndex + 1) % total, (currentIndex - 1 + total) % total].forEach((i) => {
-                if (characterData[i]?.image) {
-                    const img = new Image();
-                    img.src = characterData[i].image;
-                }
-            });
-        }, 300); // Wait 300ms for slide animation to start cleanly
-        return () => clearTimeout(timeoutId);
-    }, [currentIndex, characterData, total]);
-
-    useEffect(() => {
-        const onKey = (e) => {
-            if (e.key === "ArrowRight") handleNext();
-            if (e.key === "ArrowLeft") handlePrev();
-        };
-        window.addEventListener("keydown", onKey);
-        return () => window.removeEventListener("keydown", onKey);
-    }, [handleNext, handlePrev]);
-
-    if (isLoading) return (
-        <div className="h-[100dvh] bg-[#030303] flex items-center justify-center">
-            <Loader2 className="w-6 h-6 text-[#00E676] animate-spin" />
-        </div>
+    const raw = data?.data || data;
+    const characters = (Array.isArray(raw) && raw.length ? raw : DEFAULT_CHARACTER_DATA).map(
+        normalizeChar
     );
+    const total = characters.length;
+    const char = characters[index];
 
-    if (isError) return (
-        <div className="h-[100dvh] bg-[#030303] flex items-center justify-center">
-            <button onClick={refetch} className="text-red-500 uppercase text-xs font-bold tracking-widest">Retry Connection</button>
-        </div>
-    );
+    const goTo = useCallback((i) => setIndex((i + total) % total), [total]);
 
-    const ctaLink = `/character/${activeChar?.id}`;
-    const ctaLabel = activeChar?.cta || "Read Story";
+    if (isLoading) {
+        return (
+            <div className="h-[100dvh] bg-[#030303] flex items-center justify-center">
+                <Loader2 className="w-6 h-6 text-[#00E676] animate-spin" />
+            </div>
+        );
+    }
 
-    // Helper to determine if an image should be mounted in DOM
-    const isAdjacent = (index) => {
-        if (index === currentIndex) return true;
-        if (index === (currentIndex + 1) % total) return true;
-        if (index === (currentIndex - 1 + total) % total) return true;
-        return false;
-    };
+    if (isError) {
+        return (
+            <div className="h-[100dvh] bg-[#030303] flex items-center justify-center">
+                <button
+                    onClick={refetch}
+                    className="text-red-500 uppercase text-xs font-bold tracking-widest"
+                >
+                    Retry Connection
+                </button>
+            </div>
+        );
+    }
+
+    const [first, ...rest] = char.name.trim().split(" ");
+    const last = rest.join(" ");
 
     return (
         <section className="relative w-full bg-[#030303] overflow-hidden font-sans selection:bg-[#00E676]/30 selection:text-white">
-            <InjectStyles />
+            <style>{`
+                @keyframes heroFadeIn { from { opacity: 0; transform: scale(1.02); } to { opacity: 1; transform: scale(1); } }
+                .hero-image { animation: heroFadeIn .5s ease-out both; }
+                @keyframes heroTextIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+                .hero-text { animation: heroTextIn .5s ease-out both; }
+            `}</style>
 
-            {/* ── MOBILE VIEW (OPTIMIZED FOR PERFORMANCE & UX) ── */}
-            <div className="block lg:hidden relative w-full h-[100dvh] min-h-[600px]">
-
-                {/* Images */}
-                {characterData.map((char, i) => (
-                    <CharImage
+            <div className="relative w-full h-[100dvh] min-h-[600px] lg:h-[90vh] lg:min-h-[700px] lg:grid lg:grid-cols-[1fr_1.1fr] lg:max-w-[1800px] lg:mx-auto">
+                {/* ── Image (single shared layer, one request at a time) ── */}
+                <div className="absolute inset-0 lg:relative lg:h-full overflow-hidden bg-[#0a0a0a]">
+                    <img
                         key={char.id}
-                        char={char}
-                        isActive={i === currentIndex}
-                        isAdjacent={isAdjacent(i)}
+                        src={char.image}
+                        alt={char.name}
+                        fetchPriority="high"
+                        loading="eager"
+                        decoding="async"
+                        className="hero-image absolute inset-0 w-full h-full object-cover object-top"
                     />
-                ))}
-
-                {/* Performance-friendly Gradients (No backdrop-blurs) */}
-                <div className="absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-black/70 to-transparent z-10 pointer-events-none" />
-                <div className="absolute inset-x-0 bottom-0 h-[65%] bg-gradient-to-t from-[#050505] via-[#050505]/90 to-transparent z-10 pointer-events-none" />
-
-                {/* Top Interactions Badge */}
-                <div className="absolute top-safe pt-20 inset-x-5 z-30 flex justify-end items-center">
-                    <div className="flex items-center gap-2.5 px-3.5 py-2 rounded-full bg-black/80 border border-white/10 shadow-md">
-                        <PulsingDot />
-                        <span className="text-white text-[10px] font-bold tracking-widest uppercase mt-[1px]">
-                            {interactionCount} <span className="text-zinc-400 font-medium">Interactions</span>
-                        </span>
-                    </div>
+                    {/* mobile overlay */}
+                    <div className="absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-black/70 to-transparent lg:hidden" />
+                    <div className="absolute inset-x-0 bottom-0 h-[60%] bg-gradient-to-t from-[#050505] via-[#050505]/85 to-transparent lg:hidden" />
+                    {/* desktop overlay */}
+                    <div className="hidden lg:block absolute inset-0 bg-gradient-to-r from-transparent via-[#030303]/10 to-[#030303]" />
                 </div>
 
-                {/* 
-                    FIX 1: z-[20] and pb-[100px] ensures the CTA is lifted safely above the bottom nav bar.
-                    Adjust the 100px up or down slightly if your specific nav bar is taller/shorter. 
-                */}
-                <div className="absolute inset-x-0 bottom-0 z-20 px-5 pb-[100px] flex flex-col">
+                {/* ── Content (shared markup, responsive sizing) ── */}
+                <div
+                    key={char.id}
+                    className="hero-text absolute inset-x-0 bottom-0 z-20 px-5 pb-28 sm:pb-32 lg:static lg:flex lg:flex-col lg:justify-center lg:px-16 xl:px-24 lg:pb-0 lg:bg-[#030303]"
+                >
+                    <div className="lg:max-w-2xl">
+                        <StatusBar rank={index + 1} interactions={char.interactions} />
 
-                    {/* 
-                        FIX 2: Removed the dynamic key={...} so React doesn't destroy and rebuild this div.
-                        Added transition-opacity for smooth text swapping. 
-                    */}
-                    <div className="flex flex-col transition-opacity duration-300">
-                        <div className="self-start px-2.5 py-1 mb-3 rounded-[3px] bg-[#00E676] text-[9px] font-bold tracking-widest uppercase text-black shadow-sm">
-                            Trending #{currentIndex + 1}
-                        </div>
-
-                        <h1 className="text-[40px] leading-[0.95] font-black uppercase tracking-tight mb-3">
-                            <span className="text-white drop-shadow-md">{nameFirst}</span>
-                            <br />
-                            {nameRest && <span className="text-zinc-400 drop-shadow-md">{nameRest}</span>}
+                        <h1 className="font-black uppercase tracking-tight leading-[0.92] text-white text-[38px] sm:text-[46px] lg:text-[clamp(48px,6vw,84px)] mb-4">
+                            {first}
+                            {last && <span className="text-zinc-500"> {last}</span>}
                         </h1>
 
-                        <p className="text-sm text-zinc-300 leading-relaxed font-light line-clamp-3 mb-6 drop-shadow-md pr-2">
-                            {activeChar?.description}
+                        <p className="text-zinc-300 text-sm sm:text-base leading-relaxed font-light line-clamp-3 lg:line-clamp-none max-w-xl mb-6 lg:mb-8">
+                            {char.description}
                         </p>
 
-                        <div className="flex items-center gap-3">
-                            {/* Main CTA Button */}
-                            <Link to={ctaLink} className="flex-1 flex justify-center items-center gap-2 px-4 py-4 rounded-xl bg-[#00E676] text-black text-xs font-bold tracking-widest uppercase hover:bg-[#00E676]/90 active:scale-[0.98] transition-all shadow-md">
+                        {char.traits.length > 0 && (
+                            <div className="hidden lg:flex flex-wrap gap-2 mb-10">
+                                {char.traits.slice(0, 3).map((t) => (
+                                    <TraitPill key={t} trait={t} />
+                                ))}
+                            </div>
+                        )}
+
+                        <div className="flex items-center gap-3 lg:gap-8">
+                            <Link
+                                to={`/character/${char.id}`}
+                                className="flex-1 lg:flex-none inline-flex justify-center items-center gap-2 px-6 py-4 rounded-xl lg:rounded-[4px] bg-[#00E676] text-black text-xs sm:text-sm font-bold tracking-wide uppercase hover:bg-[#00E676]/90 active:scale-[0.98] transition-all"
+                            >
                                 <Play className="w-4 h-4 fill-current" />
-                                {ctaLabel}
+                                {char.cta}
                             </Link>
 
-                            {/* Nav Buttons (48x48px for perfect mobile touch targets) */}
-                            <div className="flex gap-2">
-                                <button onClick={handlePrev} aria-label="Previous" className="w-12 h-12 flex items-center justify-center rounded-xl bg-white/10 border border-white/5 text-white active:bg-white/20 transition-colors">
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={() => goTo(index - 1)}
+                                    aria-label="Previous"
+                                    className="w-12 h-12 lg:w-11 lg:h-11 flex items-center justify-center rounded-xl lg:rounded-[4px] bg-white/10 border border-white/10 text-white hover:bg-white/20 active:scale-95 transition-all"
+                                >
                                     <ChevronLeft className="w-5 h-5" />
                                 </button>
-                                <button onClick={handleNext} aria-label="Next" className="w-12 h-12 flex items-center justify-center rounded-xl bg-white/10 border border-white/5 text-white active:bg-white/20 transition-colors">
+                                <button
+                                    onClick={() => goTo(index + 1)}
+                                    aria-label="Next"
+                                    className="w-12 h-12 lg:w-11 lg:h-11 flex items-center justify-center rounded-xl lg:rounded-[4px] bg-white/10 border border-white/10 text-white hover:bg-white/20 active:scale-95 transition-all"
+                                >
                                     <ChevronRight className="w-5 h-5" />
                                 </button>
                             </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
 
-            {/* ── DESKTOP MINIMAL VIEW ── */}
-            <div className="hidden lg:grid grid-cols-[1fr_1.1fr] w-full h-[90vh] min-h-[700px] max-w-[1800px] mx-auto">
-                <div className="relative overflow-hidden group">
-                    {characterData.map((char, i) => (
-                        <CharImage
-                            key={char.id}
-                            char={char}
-                            isActive={i === currentIndex}
-                            isAdjacent={isAdjacent(i)}
-                        />
-                    ))}
-                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-[#030303]/20 to-[#030303] z-20 pointer-events-none" />
-                    <div className="absolute inset-0 bg-gradient-to-t from-[#030303] via-transparent to-transparent opacity-90 z-20 pointer-events-none" />
-                </div>
-
-                <div className="relative flex flex-col justify-center px-16 xl:px-24 bg-[#030303] z-30">
-                    <div key={`desktop-text-${currentIndex}`} className="relative max-w-2xl animate-fade-right">
-                        <div className="flex items-center gap-4 text-[10px] font-bold tracking-widest uppercase mb-8">
-                            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 border border-white/10 text-white">
-                                <PulsingDot />
-                                {interactionCount} <span className="text-zinc-500">interactions</span>
-                            </div>
-                            <span className="text-zinc-500">
-                                Global Rank <strong className="text-[#00E676]">#{currentIndex + 1}</strong>
-                            </span>
-                        </div>
-
-                        <h1 className="font-black uppercase tracking-tighter leading-[0.9] text-[clamp(48px,6vw,84px)] mb-6 text-white">
-                            {nameFirst}
-                            <br />
-                            {nameRest && <span className="text-zinc-500">{nameRest}</span>}
-                        </h1>
-
-                        <div className="relative pl-5 mb-10 border-l-2 border-[#00E676]">
-                            <p className="text-[10px] font-bold tracking-[0.2em] uppercase text-[#00E676] mb-3">Intelligence Profile</p>
-                            <p className="text-base text-zinc-300 leading-relaxed font-light max-w-xl">
-                                {activeChar?.description.slice(0, 300)}{activeChar?.description.length > 300 ? "..." : ""}
-                            </p>
-                        </div>
-
-                        <div className="flex flex-wrap gap-2.5 mb-12">
-                            {traits?.map((trait, i) => (
-                                <TraitPill key={i} trait={trait} />
-                            ))}
-                        </div>
-
-                        <div className="flex items-center gap-10">
-                            <Link to={ctaLink} className="group relative inline-flex items-center gap-3 px-8 py-4 bg-white text-black rounded-[4px] transition-all hover:bg-zinc-200 active:scale-[0.98]">
-                                <Play className="relative w-4 h-4 fill-current z-10" />
-                                <span className="relative text-[11px] font-bold tracking-widest uppercase z-10">{ctaLabel}</span>
-                            </Link>
-
-                            <div className="flex items-center gap-6">
-                                <div className="flex gap-1">
-                                    <button onClick={handlePrev} aria-label="Previous" className="p-3 text-zinc-400 hover:text-white bg-white/5 hover:bg-white/10 transition-all rounded-[4px]"><ChevronLeft className="w-5 h-5" /></button>
-                                    <button onClick={handleNext} aria-label="Next" className="p-3 text-zinc-400 hover:text-white bg-white/5 hover:bg-white/10 transition-all rounded-[4px]"><ChevronRight className="w-5 h-5" /></button>
-                                </div>
-                                <div className="w-[1px] h-8 bg-white/10" />
-                                <div className="flex flex-col gap-2 justify-center">
-                                    <Pips total={total} current={currentIndex} onSelect={setCurrentIndex} />
-                                    <span className="font-mono text-[10px] tracking-widest text-zinc-600 uppercase">
-                                        <strong className="text-zinc-300">{String(currentIndex + 1).padStart(2, "0")}</strong> / {String(total).padStart(2, "0")}
+                            <div className="hidden lg:flex items-center gap-6 ml-2">
+                                <div className="w-px h-8 bg-white/10" />
+                                <div className="flex flex-col gap-2">
+                                    <Pips total={total} current={index} onSelect={setIndex} />
+                                    <span className="font-mono text-[10px] tracking-widest text-zinc-600">
+                                        <strong className="text-zinc-300">
+                                            {String(index + 1).padStart(2, "0")}
+                                        </strong>{" "}
+                                        / {String(total).padStart(2, "0")}
                                     </span>
                                 </div>
                             </div>
